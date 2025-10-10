@@ -12,19 +12,15 @@ def clean_and_normalize(value: str, item_name: str) -> str:
     cleaned = re.sub(r'[\s\u3000]+', ' ', cleaned).strip() 
     
     if item_name == '名前' or item_name == '氏名':
-        # 1. 括弧や記号で囲まれたノイズを、中身ごと一括で削除（【】や（）の中身も消去）
+        # 括弧や記号で囲まれたノイズを、中身ごと一括で削除
         cleaned = re.sub(r'[\(（\[【].*?[\)）\]】]', '', cleaned) 
         
-        # 2. 名前の区切りに使われるノイズ文字（・、_）をスペースに変換
+        # 名前の区切りに使われるノイズ文字（・、_）をスペースに変換し、末尾のハイフンを削除
         cleaned = re.sub(r'[・\_]', ' ', cleaned)
-        
-        # 3. 末尾に連続するハイフンを削除
         cleaned = re.sub(r'[-]+$', '', cleaned).strip() 
         
-        # 4. 氏名内の全てのスペース（全角・半角・連続）を削除し、連結 (これこそが空白を消す作業)
+        # 氏名内の全てのスペースを削除し、連結
         cleaned = re.sub(r'\s+', '', cleaned).strip()
-        
-        return cleaned
     
     if item_name == '年齢':
         numeric_val = re.sub(r'[\D\.,]+', '', cleaned)
@@ -60,11 +56,16 @@ def clean_and_normalize(value: str, item_name: str) -> str:
 
 def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
     """メールデータDataFrameを受け取り、抽出結果と信頼度スコアを返す。"""
+    
+    # 抽出前に本文をクリーンアップ (構造崩壊防止)
+    mail_data_df['本文(テキスト形式)'] = mail_data_df['本文(テキスト形式)'].str.replace(r'[\r\n\t]', ' ', regex=True)
+    mail_data_df['本文(テキスト形式)'] = mail_data_df['本文(テキスト形式)'].str.replace(r'\s+', ' ', regex=True) 
+
     all_extracted_rows = []
     
     for index, row in mail_data_df.iterrows():
         mail_id = str(row.get('EntryID', f'Row_{index+1}'))
-        full_mail_text = str(row.get('本文(テキスト形式)', ''))
+        full_mail_text = str(row.get('本文(テキスト形式)', '')) 
         
         full_text_for_search = full_mail_text
         
@@ -76,9 +77,8 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
             base_item_name = item_key.split('_')[0]
             
             flags = re.IGNORECASE
-            # 📌 修正: 全ての項目で DOTALL を有効にして、改行を跨いで抽出できるようにする
-            # if item_key == 'スキルor言語': # <-- この条件を削除
-            flags |= re.DOTALL # <-- これで全ての項目がDOTALLになる
+            if item_key == 'スキルor言語':
+                flags |= re.DOTALL 
 
             match = re.search(pattern, full_text_for_search, flags)
             

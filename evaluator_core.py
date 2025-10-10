@@ -17,7 +17,6 @@ def get_question_data_from_csv(file_path: str) -> pd.DataFrame:
         return pd.DataFrame()
     
     try:
-        # CSVの区切り文字を自動認識させる
         df = pd.read_csv(file_path, encoding='utf-8-sig', sep=None, engine='python', dtype={'EntryID': str})
         print(f"✅ 問題CSVから {len(df)} 件のデータを読み込みました。")
         return df
@@ -41,7 +40,6 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
     print("\n--- 3. 評価と検証（リザルトCSV生成）---")
     
     try:
-        # マスターはタブ区切りで生成されるため、明示的に sep='\t' で読み込む
         df_master = pd.read_csv(master_path, 
                                 encoding='utf-8-sig', 
                                 dtype={'EntryID': str},
@@ -71,11 +69,9 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
             total_checks += 1
             
             if col == '名前':
-                # 氏名に特化したクリーンアップを両方にかける
                 extracted_val = clean_name_for_comparison(row[col_E])
                 master_val = clean_name_for_comparison(row[col_M])
             else:
-                # その他の項目は従来のクリーンアップ
                 extracted_val = re.sub(r'[\s\t\r\n\u200b\u3000,\-歳万]+', '', str(row[col_E]).strip().lower())
                 master_val = re.sub(r'[\s\t\r\n\u200b\u3000,\-歳万]+', '', str(row[col_M]).strip().lower())
             
