@@ -1,8 +1,9 @@
 # data_processor.py
-#抽出、正規表現、データ管理 フィルタリングのチェック欄の機能
+#正規表現、データ管理 フィルタリングの機能
 import pandas as pd
 import re
 import os
+import unicodedata
 from gui_config import ITEM_PATTERNS,SCRIPT_DIR, OUTPUT_CSV_FILE
 from gui_utils import clean_and_normalize
 
@@ -60,6 +61,32 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
         all_extracted_rows.append(extracted_data)
         
     return pd.DataFrame(all_extracted_rows)
+
+def safe_to_int(value):
+    """単金や年齢の文字列を安全に整数に変換するヘルパー関数"""
+    if pd.isna(value) or value is None: return None
+    value_str = str(value).strip()
+    if not value_str: return None 
+    try:
+        # 文字列のクリーンアップと正規化
+        cleaned_str = re.sub(r'[\s　\xa0\u3000]+', '', value_str) 
+        normalized_str = unicodedata.normalize('NFKC', cleaned_str)
+        # 不要な文字を除去 
+        cleaned_str = normalized_str.replace(',', '').replace('万円', '').replace('歳', '').strip()
+        # 数字と小数点以外を除去（小数点以下も許可）
+        cleaned_str = re.sub(r'[^\d\.]', '', cleaned_str) 
+        
+        # cleaned_strが空文字列になった場合はNoneを返す
+        if not cleaned_str: return None
+
+        # 浮動小数点数（例: 70.5）として解釈し、小数点以下を切り捨てて整数に変換
+        return int(float(cleaned_str))
+        
+    except ValueError:
+        return None
+    except Exception:
+        return None 
+    
 def run_evaluation_feedback_and_output(extracted_df: pd.DataFrame):
     """抽出結果を最終CSVファイルに出力する。"""
     try:

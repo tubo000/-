@@ -54,6 +54,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
         if total_items_in_folder == 0: return pd.DataFrame() # フォルダが空の場合は空のDataFrameを返す
         
         # フォルダ内の全アイテムをループし、フィルタリング
+        #スキルシートの抽出
         for item in filtered_items:
             if item.Class == 43: # 43はメールアイテム (olMail) のクラスコード
                 mail_item = item

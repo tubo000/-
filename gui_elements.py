@@ -1,16 +1,14 @@
 # gui_elements.py
-#ボタン配置
+#最初の場面のボタン配置
 import tkinter as tk
 from tkinter import Frame
 import os 
 import pandas as pd
 
-from config import OUTPUT_CSV_FILE,SCRIPT_DIR
-from utils import save_config_csv ,load_config_csv
+from gui_config import OUTPUT_CSV_FILE,SCRIPT_DIR
 from gui_search_window import open_search_window
-from data_processor import run_extraction_workflow
-from gui_main_window import root , setting_frame ,saved_account ,saved_folder ,open_settings_window
-
+from gui_callbacks import run_extraction_workflow
+from gui_main_window import root , setting_frame ,saved_account ,open_settings_window ,folder_entry ,status_label
 
 
 
@@ -19,16 +17,6 @@ account_entry = tk.Entry(setting_frame, width=40)
 account_entry.insert(0, saved_account) 
 account_entry.grid(row=0, column=1, sticky="ew", padx=5)
 setting_frame.grid_columnconfigure(1, weight=1)
-
-tk.Label(setting_frame, text="対象フォルダパス (必須):").grid(row=1, column=0, sticky="w", pady=5)
-folder_entry = tk.Entry(setting_frame, width=40) 
-folder_entry.insert(0, saved_folder) 
-folder_entry.grid(row=1, column=1, sticky="ew", padx=5)
-
-tk.Label(setting_frame, text="入力例: 受信トレイ\\プロジェクトXのスキルシート", fg="gray", font=("Arial", 9)).grid(row=2, column=1, sticky="w", padx=5)
-
-status_label = tk.Label(root, text="準備完了。設定を確認し、ボタンを押してください。", fg="black", padx=10, pady=15, font=("Arial", 10))
-status_label.pack(fill='x')
 
 main_button_frame = Frame(root)
 main_button_frame.pack(pady=5)
@@ -77,4 +65,6 @@ settings_button = tk.Button(
 settings_button.pack(side=tk.TOP, padx=10, pady=5)
 
 root.mainloop()
+
+
 

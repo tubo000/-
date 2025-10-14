@@ -5,8 +5,9 @@ import tkinter as tk
 from tkinter import messagebox
 import pandas as pd 
 import os
-from config import save_config_csv ,SCRIPT_DIR ,INTERMEDIATE_CSV_FILE
-from data_processor import  extract_skills_data , run_evaluation_feedback_and_output
+from gui_config import SCRIPT_DIR ,INTERMEDIATE_CSV_FILE
+from gui_utils import save_config_csv
+from gui_data_processor import  extract_skills_data , run_evaluation_feedback_and_output
 from outlook_api import get_mail_data_from_outlook_in_memory
 
 def run_extraction_workflow(root, account_entry, folder_entry, status_label, search_button):

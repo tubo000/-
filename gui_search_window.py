@@ -6,90 +6,20 @@ import tkinter as tk
 from tkinter import messagebox, Frame,Scrollbar, IntVar ,Checkbutton, ttk 
 import pandas as pd
 import re
-import unicodedata
 
-from config import SCRIPT_DIR ,OUTPUT_CSV_FILE
-from utils import treeview_sort_column
-from data_processor import apply_checkbox_filter
 
-def safe_to_int(value):
-    """単金や年齢の文字列を安全に整数に変換するヘルパー関数"""
-    if pd.isna(value) or value is None: return None
-    value_str = str(value).strip()
-    if not value_str: return None 
-    try:
-        # 文字列のクリーンアップと正規化
-        cleaned_str = re.sub(r'[\s　\xa0\u3000]+', '', value_str) 
-        normalized_str = unicodedata.normalize('NFKC', cleaned_str)
-        # 不要な文字を除去 
-        cleaned_str = normalized_str.replace(',', '').replace('万円', '').replace('歳', '').strip()
-        # 数字と小数点以外を除去（小数点以下も許可）
-        cleaned_str = re.sub(r'[^\d\.]', '', cleaned_str) 
-        
-        # cleaned_strが空文字列になった場合はNoneを返す
-        if not cleaned_str: return None
+from gui_config import SCRIPT_DIR ,OUTPUT_CSV_FILE
+from gui_utils import treeview_sort_column 
+from gui_data_processor import apply_checkbox_filter ,safe_to_int
 
-        # 浮動小数点数（例: 70.5）として解釈し、小数点以下を切り捨てて整数に変換
-        return int(float(cleaned_str))
-        
-    except ValueError:
-        return None
-    except Exception:
-        return None 
-    
+
 def toggle_all_checkboxes(vars_dict, select_state, update_func):
     """全てのチェックボックスの状態を切り替え、テーブルを更新する"""
     for var in vars_dict.values():
         var.set(select_state)
     update_func()
 #すべてのチェックボックスの機能
-def apply_checkbox_filter(df, column_name, selected_items, keyword_list):
-    """DataFrameにチェックボックスと手動キーワードによるANDフィルタを適用する。（AND条件）"""
-    # 項目が選択されていない場合は、全てのデータをそのまま返す
-    if not selected_items and not keyword_list:
-        return df
-    if column_name not in df.columns:
-        return df 
-    
-    is_match = pd.Series(True, index=df.index) 
-    column_series = df[column_name].astype(str)
-    
-    # 1. チェックボックスフィルタ（OR条件）
-    if selected_items:
-        # 選択された項目が、対象カラムにすべてマッチするかどうか (AND条件)
-        
-        is_match_and = pd.Series(True, index=column_series.index) # すべての行をTrueで初期化
-
-        # 区切り文字の定義
-        delimiter_chars = r'[\s,、/・]'
-        
-        # 選択された各項目について、AND条件を順次適用
-        for item in selected_items:
-            escaped_item = re.escape(item)
-            
-            # パターン: (行頭 or 区切り文字) + 項目 + (区切り文字 or 行末)
-            # itemが文字列中のどこかに単語として存在するかをチェックする正規表現パターン
-            pattern = r'(?:^|' + delimiter_chars + r')' + escaped_item + r'(?:' + delimiter_chars + r'|$)'
-
-            # 現在のitemが、対象カラムの文字列に含まれているか（大文字小文字無視）
-            current_item_match = column_series.str.contains(pattern, na=False, flags=re.IGNORECASE, regex=True)
-            
-            # これまでのマッチ結果と現在のマッチ結果をANDで結合
-            is_match_and = is_match_and & current_item_match
-            
-        # 最終的なAND条件の結果を全体のis_matchに反映
-        is_match = is_match & is_match_and
-    # 2. 手動キーワードフィルタ（AND条件）
-    if keyword_list:
-        # カンマ区切りで入力された各キーワードについて、全てのマッチを要求 (AND条件)
-        for keyword in keyword_list:
-            escaped_keyword = re.escape(keyword)
-            # キーワードが文字列中のどこかに含まれているかチェック (大文字小文字無視)
-            keyword_match = column_series.str.contains(escaped_keyword, na=False, flags=re.IGNORECASE, regex=True)
-            is_match = is_match & keyword_match # ANDで結合
-
-    return df[is_match]
-
+#検索結果一覧のボタンを押した後のウィンドウの作成
 def open_search_window(root):
     output_csv_path = os.path.join(SCRIPT_DIR, OUTPUT_CSV_FILE)
     
@@ -142,7 +72,7 @@ def open_search_window(root):
     sorted_business = get_unique_items(df, BUSINESS_COLUMN) if has_business_filter else []
     sorted_os = get_unique_items(df, OS_COLUMN) if has_os_filter else []
 
-    MAX_CHECKBOXES = 20 # 上位20件に限定
+    MAX_CHECKBOXES = 10 # 上位10件に限定
     
     limited_skills = sorted_skills[:MAX_CHECKBOXES] 
     limited_business = sorted_business[:MAX_CHECKBOXES]
@@ -255,7 +185,7 @@ def open_search_window(root):
             )
             cb.pack(fill='x', pady=0, padx=0) # パディングを詰めてコンパクトに
 
-
+    #この下が更新ボタンを作るならいらない
     # =================================================================
     # 💡 update_table 関数 (範囲フィルタリングロジックの適用)
     # =================================================================

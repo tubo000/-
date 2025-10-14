@@ -3,7 +3,7 @@
 #変数の宣言
 import os
 import sys 
-
+#exe化しても動作するように絶対パスでの参照
 def get_script_dir():
     """実行中のスクリプト（またはexe）のディレクトリパスを確実に取得する。"""
     if getattr(sys, 'frozen', False):
@@ -48,17 +48,8 @@ ITEM_PATTERNS = {
         {'pattern': r'(?:O\s*S|基\s*盤|基本O\s*S)\s*[：:]\s*([^\n]+)', 'score': 100}, 
     ],
 }
-
-OUTPUT_CSV_FILE = OUTPUT_EVAL_PATH.replace('.xlsx', '_final.csv') # 最終出力CSVファイル名
+#メールをcsvにいったん起こす
 INTERMEDIATE_CSV_FILE = 'intermediate_mail_data.csv' # 一時的な中間ファイル名
+OUTPUT_CSV_FILE = OUTPUT_EVAL_PATH.replace('.xlsx', '_final.csv') # 最終出力CSVファイル名
 
-# =========================================================
-# 💡 ユーティリティ/ファイル処理関数
-# =========================================================
-#EXE化していても動くように絶対パスを参照するためのコード
-def get_script_dir():
-    """実行中のスクリプト（またはexe）のディレクトリパスを確実に取得する。"""
-    if getattr(sys, 'frozen', False):
-        return os.path.dirname(sys.executable)
-    else:
-        return os.path.dirname(os.path.abspath(__file__))
+
