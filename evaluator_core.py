@@ -1,28 +1,91 @@
 # evaluator_core.py
-# 責務: 試験用CSVの読み書き、抽出結果とマスターデータの比較評価、および評価結果の出力を行う。
+# 責務: 試験用CSVの読み書き、抽出結果とマスターデータの比較評価、およびGUIユーティリティ
 
 import pandas as pd
 import re
 import os
-# configから評価対象の項目リスト（EVALUATION_TARGETS）をインポート
-from config import EVALUATION_TARGETS 
+import unicodedata  # ソート用の文字正規化に必要
+from tkinter import ttk     # Treeviewソートに必要 (ttk)
+import tkinter as tk        # Tkinterの基本機能
+
+from config import EVALUATION_TARGETS, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH 
 
 
 # ----------------------------------------------------
-# 評価用ユーティリティ関数
+# 評価用ユーティリティ関数 (GUIフィルタリングとソートで使用)
+# ----------------------------------------------------
+
+def safe_to_int(value):
+    """単金や年齢の文字列を安全に整数に変換するヘルパー関数（GUIフィルタリング用）"""
+    if pd.isna(value) or value is None: return None
+    value_str = str(value).strip()
+    if not value_str: return None 
+    try:
+        # 文字列のクリーンアップと正規化
+        cleaned_str = re.sub(r'[\s　\xa0\u3000]+', '', value_str) 
+        normalized_str = unicodedata.normalize('NFKC', cleaned_str)
+        
+        # 不要な文字を除去 (万円, 歳, カンマなどを除去)
+        cleaned_str = normalized_str.replace(',', '').replace('万円', '').replace('歳', '').strip()
+        cleaned_str = re.sub(r'[^\d\.]', '', cleaned_str) 
+        
+        if not cleaned_str: return None
+        
+        # 浮動小数点数として解釈し、整数に変換（小数点以下を切り捨て）
+        return int(float(cleaned_str))
+        
+    except ValueError:
+        return None
+    except Exception:
+        return None 
+
+def treeview_sort_column(tv, col, reverse):
+    """Treeviewのカラムソート処理。数値カラムのソートを強化する。"""
+    # Treeviewからデータをリストとして取得 (タプル形式: [(値, item_id), ...])
+    l = [(tv.set(k, col), k) for k in tv.get_children('')]
+    
+    def try_convert(val):
+        """ソートキーとして使うために値を数値または文字列に変換"""
+        if pd.isna(val) or val is None or val == 'N/A': return ''
+        
+        if col in ['単金', '年齢']:
+            # 数値カラム: 文字列から数値のみを抽出し、整数としてソート
+            val_str = str(val).replace(',', '').replace('万円', '').replace('歳', '').strip()
+            try:
+                val_str = unicodedata.normalize('NFKC', val_str)
+            except: pass
+            try:
+                return int(float(val_str))
+            except ValueError: return val_str
+            
+        if col == '信頼度スコア':
+             # 信頼度スコアは浮動小数点数としてソート
+             try: return float(val)
+             except ValueError: return str(val)
+             
+        return str(val)
+        
+    # リストをソート (ソートキーに関数 try_convert を適用)
+    l.sort(key=lambda t: try_convert(t[0]), reverse=reverse)
+    
+    # Treeviewの並び順を更新
+    for index, (val, k) in enumerate(l):
+        tv.move(k, '', index)
+        
+    # ヘッダーのコマンドを再設定し、ソート順を反転させる
+    tv.heading(col, command=lambda c=col: treeview_sort_column(tv, c, not reverse))
+
+# ----------------------------------------------------
+# 評価コアロジック
 # ----------------------------------------------------
 
 def get_question_data_from_csv(file_path: str) -> pd.DataFrame:
-    """
-    外部の試験用CSVファイル（問題データ）を読み込み、DataFrameとして返す。
-    CSV/TSVどちらでも読み込めるよう、sep=None (自動判別) を使用。
-    """
+    """外部CSVを読み込み、抽出対象のDataFrameとして返す。"""
     if not os.path.exists(file_path):
         print(f"❌ エラー: 問題CSVファイル '{file_path}' が見つかりません。")
         return pd.DataFrame()
     
     try:
-        # UTF-8 BOM付き ('utf-8-sig') で読み込み、EntryIDを文字列として保持
         df = pd.read_csv(file_path, encoding='utf-8-sig', sep=None, engine='python', dtype={'EntryID': str})
         print(f"✅ 問題CSVから {len(df)} 件のデータを読み込みました。")
         return df
@@ -32,21 +95,13 @@ def get_question_data_from_csv(file_path: str) -> pd.DataFrame:
 
 
 def clean_name_for_comparison(name_str):
-    """
-    評価比較のために、氏名文字列からノイズ（括弧、記号、スペース）をすべて除去し、連結する。
-    抽出結果とマスターデータの両方に適用される。
-    """
+    """評価比較用に氏名をクリーンアップし、連結する"""
     name_str = str(name_str).strip()
-    # 1. 括弧（全角/半角/角括弧/波括弧）とその中の内容を削除
     name_str = re.sub(r'[\(（\[【].*?[\)）\]】]', '', name_str) 
-    # 2. 名前の区切りに使われるノイズ文字（・、_）をスペースに変換
     name_str = re.sub(r'[・\_]', ' ', name_str)
-    # 3. 末尾に連続するハイフンを削除
     name_str = re.sub(r'[-]+$', '', name_str).strip() 
-    # 4. 氏名内の全てのスペースを削除し、小文字化して連結 (例: David Lee -> davidlee)
     name_str = re.sub(r'\s+', '', name_str).strip().lower()
     return name_str
-
 
 def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, output_path: str):
     """
@@ -58,7 +113,6 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
     
     # --- 1. マスターデータの読み込み ---
     try:
-        # マスターはダミーデータ生成側でタブ区切りで出力されるため、sep='\t'を指定
         df_master = pd.read_csv(master_path, 
                                 encoding='utf-8-sig', 
                                 dtype={'EntryID': str},
@@ -69,10 +123,7 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
         return
 
     # --- 2. データ結合と前処理 ---
-    # 評価対象の列をマスターデータから取得
     EVAL_COLS = [c for c in EVALUATION_TARGETS if c in df_master.columns] 
-    
-    # EntryIDをキーに、抽出結果（_E）とマスター（_M）を結合
     merged_df = pd.merge(df_extracted.reset_index(drop=True), df_master.reset_index(), on='EntryID', how='inner', suffixes=('_E', '_M'))
     
     if merged_df.empty:
@@ -93,15 +144,12 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
             total_checks += 1
             
             if col == '名前':
-                # 氏名: 専用のクリーンアップ関数を適用
                 extracted_val = clean_name_for_comparison(row[col_E])
                 master_val = clean_name_for_comparison(row[col_M])
             else:
-                # その他: スペース、タブ、改行、単位（歳/万）などを除去して比較
                 extracted_val = re.sub(r'[\s\t\r\n\u200b\u3000,\-歳万]+', '', str(row[col_E]).strip().lower())
                 master_val = re.sub(r'[\s\t\r\n\u200b\u3000,\-歳万]+', '', str(row[col_M]).strip().lower())
             
-            # マスターがN/Aまたは空の場合は比較対象から除外
             if master_val == 'n/a' or not master_val:
                 total_checks -= 1 
                 continue

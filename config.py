@@ -1,5 +1,4 @@
 # config.py
-# 責務: アプリケーション全体で使用されるファイルパス、定数、辞書データ、正規表現パターンを一元管理する。
 
 import os
 import sys
@@ -14,39 +13,34 @@ import re
 # ----------------------------------------------------
 def get_script_dir():
     """実行中のスクリプト（またはexe）のディレクトリパスを確実に取得する。"""
-    # PyInstallerなどで実行ファイル化されているかチェックし、適切なディレクトリを返す
     if getattr(sys, 'frozen', False):
-        return os.path.dirname(os.path.abspath(sys.executable))
+        return os.path.dirname(os.path.executable)
     else:
         return os.path.dirname(os.path.abspath(__file__))
     
-SCRIPT_DIR = get_script_dir() # スクリプトが格納されているルートディレクトリのパス
+SCRIPT_DIR = get_script_dir()
 # ----------------------------------------------------
 
 # ★★★ ファイルパスと設定 ★★★
-INPUT_QUESTION_CSV = 'question_source.csv'     # 試験モードで使用する問題データファイル名
-MASTER_ANSWERS_PATH = 'master_answers.csv'       # 試験モードで使用する正解データファイル名
-OUTPUT_EVAL_PATH = 'evaluation_results.csv'      # 評価結果の出力ファイル名
-NUM_RECORDS = 150                                # ダミーデータ生成時のレコード数
-TARGET_FOLDER_PATH = "受信トレイ"                    # Outlook連携時のデフォルト対象フォルダ
+INPUT_QUESTION_CSV = 'question_source.csv'
+MASTER_ANSWERS_PATH = 'master_answers.csv'
+OUTPUT_EVAL_PATH = 'evaluation_results.csv'
+NUM_RECORDS = 150 
+TARGET_FOLDER_PATH = "受信トレイ" 
 
-# 📌 GUIの依存関係を解消するための定義 (変数の別名定義)
-OUTPUT_CSV_FILE = OUTPUT_EVAL_PATH               # GUIが参照する評価結果出力ファイルの別名
-INTERMEDIATE_CSV_FILE = 'intermediate_mail_data.csv' # 中間処理用ファイル名（一時ファイル）
-CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'name.csv') # Outlookアカウント設定を保存するパス
+# 📌 GUIの依存関係を解消するための定義
+OUTPUT_CSV_FILE = OUTPUT_EVAL_PATH 
+INTERMEDIATE_CSV_FILE = 'intermediate_mail_data.csv' 
+CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'name.csv') 
 
 # ★★★ 評価・出力項目 ★★★
-EVALUATION_TARGETS = ['名前', '年齢', '単金', 'スキルor言語', '業種', '職務'] # 評価レポートの対象項目リスト
-
+EVALUATION_TARGETS = ['名前', '年齢', '単金', 'スキルor言語', '業種', '職務']
 MASTER_COLUMNS = [
-    # 最終的な抽出結果DataFrameのヘッダー列の厳密な順序を定義
     'EntryID', '件名', '名前', '性別', '年齢', '単金', 
     'スキルor言語', '役割', 'マネジメント経験人数', '技術経験年数', '得意技術',
-    # 開発工程フラグ
     '開発工程_要件定義', '開発工程_基本設計', '開発工程_詳細設計', 
     '開発工程_製造', '開発工程_結合テスト', '開発工程_システムテスト', 
     '開発工程_運用・保守', '開発工程_その他',
-    # その他属性
     '業種', '職務', '期間_開始', '期間_終了', '人数', '開発ツール', 'OS', 
     'フレームワーク/ライブラリ', 'データベース', 'その他', '備考', 
     '社名', '宛先メール', '開発手法', '信頼度スコア', '本文(テキスト形式)'
@@ -56,17 +50,14 @@ MASTER_COLUMNS = [
 LANGUAGES = ['Java', 'Python', 'C#', 'C++', 'JavaScript', 'SQL', 'Go', 'PHP', 'Ruby', 'Kotlin'] 
 INDUSTRIES = ['金融', '医療', 'IT/Web開発', '製造業', '物流', '通信', '公共', 'インフラ'] 
 NAMES = [
-    # ダミーデータ生成に使用する氏名リスト (日本語名と英語名)
     ('田中', '太郎', 0), ('佐藤', '花子', 0), ('鈴木', '一郎', 0), 
     ('高橋', '恵美', 0), ('中村', '雄大', 0), ('渡辺', '彩乃', 0),
     ('Kim', 'Park', 1), ('John', 'Smith', 1), ('David', 'Lee', 1)
 ]
 SALARY_UNITS = [
-    # ダミーデータ生成でランダムに使用される単金単位の表記ゆれ
     '万円 (固定)', '万 (税込)', '万', '000k', r'円/月'
 ]
 NOISE = [
-    # ダミーデータ生成でランダムに本文に挿入されるノイズ文字列
     "【特記事項】柔軟な勤務が可能です。",
     "これは関係ない備考です。",
     "連絡先は別途送付のPDFを参照ください。",
@@ -76,15 +67,13 @@ NOISE = [
 # ----------------------------------------------------
 # 必須キーワード/除外キーワードの定義 (Outlookフィルタリング用)
 # ----------------------------------------------------
-# メールを選別するためのキーワード（件名または本文に含まれるかチェック）
-MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材のご紹介', r'リソース'] # 必須キーワード (いずれかを含む必要がある)
-EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請'] # 除外キーワード (いずれかを含むと除外される)
+MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材のご紹介', r'リソース']
+EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請']
 # ----------------------------------------------------
 
 
 # ★★★ 正規表現パターン (ゼロ化/スペース除去後の本文に適合) ★★★
 ITEM_PATTERNS = {
-    # '項目名': {'pattern': r'(抽出パターン)', 'score': 信頼度} の形式で定義
     '名前': {'pattern': r'(?:名前|氏名)[:：]\s*([^\n\r]+?)(?:\s*(?:年齢|単金|スキル|備考|社名|$))', 'score': 100}, 
     '年齢': {'pattern': r'年齢[:：]\s*(\d+)\s*歳', 'score': 100}, 
     '単金': {'pattern': r'単金[:：]\s*([,\d]+)\s*(?:万|円/月|\(.*\))?', 'score': 100}, 

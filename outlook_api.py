@@ -1,10 +1,11 @@
 # outlook_api.py
-#outlookに接続し、メールを取得
+# 責務: Outlookデスクトップアプリに接続し、メールを取得。
 
 import pandas as pd 
 import re
 import win32com.client as win32 
-from gui_config import MUST_INCLUDE_KEYWORDS,EXCLUDE_KEYWORDS
+# config.py から必須/除外キーワードをインポート
+from config import MUST_INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS
 
 def get_outlook_folder(outlook_ns, account_name, folder_path):
     """Outlookフォルダオブジェクトを取得する。（アカウント名と階層パスを辿る）"""
@@ -17,7 +18,7 @@ def get_outlook_folder(outlook_ns, account_name, folder_path):
         try: target_store = next(st for st in outlook_ns.Stores if clean_account_name in st.DisplayName.lower())
         except StopIteration: return None 
     
-    # 2. アカウント名指定がない場合や見つからない場合は、デフォルトのストア（通常最初のストア）を使用
+    # 2. アカウント名指定がない場合や見つからない場合は、デフォルトのストアを使用
     if target_store is None and outlook_ns.Stores.Count > 0: 
         target_store = outlook_ns.Stores.Item(1)
     if target_store is None: return None
@@ -35,7 +36,7 @@ def get_outlook_folder(outlook_ns, account_name, folder_path):
     except Exception as e:
         print(f"DEBUG: フォルダ検索中にエラーが発生: {e}")
         return None
-#Outlookからメールを読み込み、メールの選択をして、フィルタリングされたデータを取得する。
+
 def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: str) -> pd.DataFrame:
     """Outlookからメールデータ（件名、本文、添付ファイル名など）を抽出する。"""
     data_records = []
@@ -54,7 +55,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
         if total_items_in_folder == 0: return pd.DataFrame() # フォルダが空の場合は空のDataFrameを返す
         
         # フォルダ内の全アイテムをループし、フィルタリング
-        #スキルシートの抽出
         for item in filtered_items:
             if item.Class == 43: # 43はメールアイテム (olMail) のクラスコード
                 mail_item = item
@@ -77,7 +77,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                 data_records.append(record)
     except RuntimeError as re_e: raise re_e
     except Exception as e:
-        # COM関連のエラーを検出して、より分かりやすいメッセージに変換
         if "ルールのパス" in str(e) or "クラスが登録されていません" in str(e):
             raise RuntimeError(f"Outlook操作エラー: Outlookが起動しているか、またはCOMアクセスが許可されているか確認してください。\n【詳細】{e}")
         raise RuntimeError(f"Outlook操作エラー: {e}")
