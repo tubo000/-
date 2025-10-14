@@ -137,14 +137,26 @@ def run_email_extraction(target_email: str):
         df_output = df_extracted.copy()
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
 
-        # ★★★ 修正: 'メールURL' 列を生のURL文字列として作成 ★★★
+        # EntryIDをURLに変換する処理 (EntryIDを左側に持ってくる役割を担う)
         df_output.insert(0, 'メールURL', df_output.apply(
             lambda row: f"outlook:{row['EntryID']}",
             axis=1
         ))
+        
+        # 📌 修正1: 最終出力列の順序を定義
+        # 名前、件名、EntryIDを左側に配置し、残りの列を後に続ける
+        
+        # 最終出力に含める列 (このリストに沿って並び替えられる)
+        fixed_leading_cols = ['メールURL', '件名', '名前']
+        
+        # その他の列を現在の順序で取得し、重複を避けて追加
+        remaining_cols = [col for col in df_output.columns if col not in fixed_leading_cols]
+        final_col_order = fixed_leading_cols + remaining_cols
+        
+        # DataFrameの列順を調整
+        df_output = df_output[final_col_order]
 
-        # 📌 最終出力列の整理（Excelに表示される）
-        # 'EntryID', '宛先メール', '本文(テキスト形式)' は削除
+        # 📌 修正2: 最終出力から不要な列を削除
         df_output = df_output.drop(columns=['EntryID', '宛先メール', '本文(テキスト形式)'], errors='ignore')
 
         # 1. pandasでベースデータ(.xlsx)を生成
@@ -152,9 +164,7 @@ def run_email_extraction(target_email: str):
         
         print(f"\n🎉 処理完了: 抽出結果を XLSX ファイル '{OUTPUT_FILENAME}' に出力しました。")
         print("💡 リンク機能はExcelに依存します。URL列をコピーし、Win+Rで貼り付けて開いてください。")
-        
-        # 2. ファイルを自動で開く
-        os.startfile(output_file_abs_path)
+    
     
     except Exception as e:
         print(f"\n❌ XLSXファイル出力エラー: {e}")
