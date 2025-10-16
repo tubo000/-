@@ -11,7 +11,7 @@ import pythoncom
 
 # 外部モジュールのインポート
 import gui_elements
-import gui_search_window
+import new_search_window
 import utils 
 
 # 既存の内部処理関数をインポート
@@ -167,8 +167,7 @@ def main():
         )
 
     def open_search_callback():
-        gui_search_window.open_search_window(root)
-        
+        new_search_window.main()
     def run_extraction_callback():
         run_extraction_thread(root, main_elements)
 
