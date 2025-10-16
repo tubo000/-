@@ -1,31 +1,34 @@
 # main.py
+# 目的: アプリケーションの実行フローを制御し、試験モードと本番テストモードの分岐を行う
 
 import os
 import sys
 import pandas as pd
-import win32com.client as win32 # 📌 追加: Outlook連携用
-# インポート
-from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS
+import win32com.client as win32 
+# 外部ファイルのインポート (システムのコア機能)
+from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH
 from data_generation import generate_raw_data, export_dataframes_to_tsv
 from extraction_core import extract_skills_data
 from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
-from email_processor import run_email_extraction, get_mail_data_from_outlook_in_memory, TARGET_FOLDER_PATH
+# 📌 修正: 以下の行は元のコードのまま維持 (email_processor から関数をインポート)
+from email_processor import run_email_extraction, get_mail_data_from_outlook_in_memory 
+
+# 📌 GUIアプリケーションのエントリーポイントをインポート
+import main_application 
 
 
 # ----------------------------------------------------
-# ユーティリティ関数: Outlook ID検索 (open_mail_by_id.pyのロジックを移植)
+# ユーティリティ関数群 (open_outlook_email_by_id, interactive_id_search_test, reorder_output_dataframe は省略)
 # ----------------------------------------------------
+# ... (open_outlook_email_by_id, interactive_id_search_test は変更なし)
 
 def open_outlook_email_by_id(entry_id: str):
-    """
-    指定された Entry ID を使用して、Outlookデスクトップアプリでメールを開く関数
-    """
+    """Entry IDを使用してOutlookデスクトップアプリでメールを開く関数。"""
     if not entry_id:
         print("エラー: Entry IDが指定されていません。", file=sys.stderr)
         return
 
     try:
-        # Outlook アプリケーションへの接続
         try:
             outlook_app = win32.GetActiveObject("Outlook.Application")
         except:
@@ -45,12 +48,8 @@ def open_outlook_email_by_id(entry_id: str):
         print("Outlookが起動しているか、またはpywin32が正しくインストールされているか確認してください。", file=sys.stderr)
 
 
-# ----------------------------------------------------
-# ユーティリティ関数: インタラクティブテスト
-# ----------------------------------------------------
-
 def interactive_id_search_test():
-    """実行後にEntry IDをテストするためのプロンプトを出す"""
+    """実行後にEntry IDをテストするためのプロンプトを出す。"""
     
     print("\n\n==================================================")
     print("💌 Entry ID 検索機能テスト")
@@ -73,39 +72,41 @@ def interactive_id_search_test():
     print("==================================================")
 
 
-# ----------------------------------------------------
-# ユーティリティ関数: 出力列の並び替え
-# ----------------------------------------------------
-
 def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    # ... (既存の関数、省略)
-    fixed_leading_cols = []
+    """出力データフレームの列順を調整し、特定の項目を左側に固定する。"""
+    fixed_leading_cols = [
+        'メールURL', '件名', '名前', '信頼度スコア', 
+        '本文(ファイル含む)', '本文(テキスト形式)', 'Attachments'
+    ]
     
-    if 'メールURL' in df.columns:
-        fixed_leading_cols.append('メールURL')
-        
-    fixed_leading_cols.extend(['件名', '名前'])
+    # DataFrameに存在するカラムのみをフィルタリング
+    fixed_leading_cols = [col for col in fixed_leading_cols if col in df.columns]
     
     all_cols = df.columns.tolist()
     
+    # leading_colsに含まれない残りのカラム
     remaining_cols = [col for col in all_cols if col not in fixed_leading_cols]
     
     final_col_order = fixed_leading_cols + remaining_cols
     
+    # 存在しない列は drop されるため、reindexを使用
     df_reordered = df.reindex(columns=final_col_order, fill_value='N/A')
     
     return df_reordered
 
 
 # ----------------------------------------------------
-# 各モードの実行関数 (省略)
+# 試験モード実行関数 (評価と柔軟なデータソース選択)
 # ----------------------------------------------------
 
 def main_process_exam_mode():
-    # ... (前略: 変更なし)
+    """
+    試験モードのメイン処理。ダミーデータまたはOutlookデータのどちらかを選択し、
+    抽出を実行した後、マスターデータとの比較評価を行う。
+    """
     print("★★ 統合スキルシート抽出・評価システム（試験モード）実行 ★★")
     
-    # ... (データソース選択のロジック、変更なし)
+    # データソースの選択プロンプト
     print("\n--- 試験データの選択 ---")
     print(" [1] ダミーデータ生成 (デフォルト): 新規データを作成しCSVから読み込み")
     print(" [2] Outlookメールから読み込み: 実際のメールデータを使用")
@@ -114,54 +115,64 @@ def main_process_exam_mode():
     df_mail_data = pd.DataFrame()
 
     if not data_source_input or data_source_input == '1':
+        # オプション1: ダミーデータ生成と評価CSVの読み込み
         print("\n→ ダミーデータ生成を開始します。")
         df_generated = generate_raw_data(NUM_RECORDS)
         export_dataframes_to_tsv(df_generated)
-        df_mail_data = get_question_data_from_csv(INPUT_QUESTION_CSV)
+        df_mail_data = get_question_data_from_csv(INPUT_QUESTION_CSV) # 生成されたCSVを読み込む
         
     elif data_source_input == '2':
+        # オプション2: 実際のOutlookデータからの読み込み
         print("\n→ Outlookからの読み込みを開始します。")
         target_email = input("✅ 対象アカウントのメールアドレスを入力してください: ").strip()
+        # email_processor.py の Outlook 取得関数を呼び出し、DataFrameを取得
+        # 📌 元のコードに戻し、ファイル冒頭のインポートに依存させる
         df_mail_data = get_mail_data_from_outlook_in_memory(TARGET_FOLDER_PATH, target_email)
     
     else:
         print(f"\n無効な入力 '{data_source_input}' です。終了します。")
         return
 
-    # ... (中略: 抽出と評価の共通処理、変更なし)
+    # 共通処理: データフレームが空でないかチェック
     if df_mail_data.empty:
         print("処理対象のメールがありませんでした。終了します。")
         return
 
+    # 抽出の実行
     print("\n--- 2. スキル抽出実行 ---")
     df_extracted = extract_skills_data(df_mail_data)
     
+    # 評価の実行 (マスターCSVと比較)
     run_triple_csv_validation(df_extracted, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH)
     
     print("\n💡 処理が完了しました。")
 
 
+# ----------------------------------------------------
+# メインディスパッチャー (プログラムの起点)
+# ----------------------------------------------------
+
 def main_dispatcher():
-    """実行モードをユーザーに問い合わせ、処理を分岐させ、最後にテストを実行する。"""
+    """プログラムの開始点。実行モードを選択し、処理を分岐させる。"""
     
     print("\n==================================================")
     print(" 実行モードを選択してください:")
     print(" [1] 試験モード (デフォルト): ダミーデータ生成と評価を実施")
-    print(" [2] メールテストモード: Outlookからメールを取得し、抽出結果をXLSXに出力")
+    print(" [2] メールテストモード: GUIアプリケーションで実行")
     print("==================================================")
     
     try:
         mode_input = input("モード番号を入力してください ([1]で実行): ").strip()
         
         if not mode_input or mode_input == '1':
+            # 試験モードの実行 (コンソールベース)
             print("\n→ 試験モード（デフォルト）を開始します。")
             main_process_exam_mode()
             
         elif mode_input == '2':
-            print("\n→ メールテストモード（Outlook）を開始します。")
-            
-            target_email = input("✅ 対象アカウントのメールアドレスを入力してください (例: user@example.com): ").strip()
-            run_email_extraction(target_email)
+            # GUIアプリケーションのエントリーポイントを呼び出す
+            print("\n→ メールテストモードをGUIで開始します。")
+            main_application.main() # main_application.py の main() 関数を呼び出し
             
         else:
             print(f"\n無効な入力 '{mode_input}' です。処理を終了します。")
@@ -172,9 +183,10 @@ def main_dispatcher():
     except Exception as e:
         print(f"致命的なエラーが発生しました: {e}")
         
-    # 📌 追加: 処理完了後にテスト機能を呼び出す
+    # 処理完了後にテスト機能を呼び出す (GUI起動後のコンソールでテストを継続)
     interactive_id_search_test()
 
 
 if __name__ == "__main__":
+    # プログラムの実行開始
     main_dispatcher()
