@@ -1,3 +1,5 @@
+#ID検索が可能
+#ファイルの読み込みも可
 #new_search_window.py
 import tkinter as tk
 from tkinter import ttk
@@ -287,10 +289,24 @@ class Screen2(ttk.Frame):
         self.setup_treeview()
         self.display_search_results()
 
-        ttk.Label(self, text="選択行の本文:").grid(row=7, column=0, padx=10, pady=(10, 0), sticky='w')
+        button_frame = ttk.Frame(self)
+        button_frame.grid(row=7, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
+        
+        # 本文表示ボタン
+        ttk.Button(button_frame, text="本文表示", 
+                   command=lambda: self.update_display_area('本文')).pack(side='left', padx=(0, 10))
+        
+        # 添付ファイル内容表示ボタンをインスタンス変数として保持
+        self.btn_attachment_content = ttk.Button(
+            button_frame, text="添付ファイル内容表示", 
+            command=lambda: self.update_display_area('添付ファイル内容'),
+            state='disabled' # 初期状態は無効化 (disabled)
+        )
+        self.btn_attachment_content.pack(side='left')
+        
+        # 本文/添付ファイル内容表示エリア
         self.body_text = tk.Text(self, wrap='word', height=10, state='disabled')
         self.body_text.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='nsew')
-
        
         ttk.Button(self, text="戻る (画面1へ)", command=master.show_screen1).grid(row=9, column=0, columnspan=2, padx=10, pady=10)
 
@@ -298,7 +314,39 @@ class Screen2(ttk.Frame):
         """ID入力欄の値をENTRY_IDとして取得し、外部のOutlook連携関数を呼び出す。"""
         entry_id = self.id_entry.get().strip()
         open_outlook_email_by_id(entry_id) # I. ロジックから呼び出し
-        
+    def check_attachment_content(self, item_id):
+        """選択行の添付ファイル内容を確認し、ボタンを有効/無効化する。"""
+        if not item_id:
+            self.btn_attachment_content.config(state='disabled')
+            return
+
+        is_content_available = False
+        try:
+            # 1. 選択行のEntry IDを取得
+            entry_id_col_index = list(self.tree['columns']).index('ENTRY_ID')
+            tree_values = self.tree.item(item_id, 'values')
+            entry_id = tree_values[entry_id_col_index]
+            
+            # 2. DataFrameから対応する行を検索
+            content_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
+            
+            # 3. 添付ファイル内容のデータを確認
+            if not content_row.empty and '添付ファイル内容' in content_row.columns:
+                content = content_row['添付ファイル内容'].iloc[0]
+                
+                # 'nan' (文字列), 空文字列, None, floatのNaNでないことをチェック
+                content_str = str(content).strip().lower()
+                if pd.notna(content) and content_str != '' and content_str != 'nan':
+                    is_content_available = True
+            
+        except (ValueError, IndexError, KeyError): 
+            pass # エラー時は無効化のまま
+
+        # 4. ボタンの状態を切り替え
+        if is_content_available:
+            self.btn_attachment_content.config(state='normal')
+        else:
+            self.btn_attachment_content.config(state='disabled')
     #タグ管理
     def draw_tags(self):
         for widget in self.tag_frame.winfo_children(): widget.destroy()
