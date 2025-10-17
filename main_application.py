@@ -9,26 +9,25 @@ import tkinter as tk
 from tkinter import Frame, messagebox, simpledialog 
 import pythoncom 
 import re 
+import traceback 
+import os.path
 
 # 外部モジュールのインポート
 import gui_elements
-import gui_search_window
+# 📌 修正1: gui_search_window.py をインポート
+import gui_search_window 
 import utils 
 
-# main.py から必要なユーティリティをインポート
-from main import reorder_output_dataframe 
 # 既存の内部処理関数をインポート
 from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
 from data_generation import generate_raw_data, export_dataframes_to_tsv
 from extraction_core import extract_skills_data
+from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
 from email_processor import run_email_extraction, get_mail_data_from_outlook_in_memory, OUTPUT_FILENAME
-
-# 📌 修正1: 抽出結果を一時的に保持するためのグローバル変数
-extracted_results_df = None
 
 
 # ----------------------------------------------------
-# ユーティリティ関数群 (GUI/コンソール連携用)
+# ユーティリティ関数群 (open_outlook_email_by_id, interactive_id_search_test は維持)
 # ----------------------------------------------------
 
 def open_outlook_email_by_id(entry_id: str):
@@ -70,9 +69,19 @@ def interactive_id_search_test():
         messagebox.showinfo("テストスキップ", "Entry ID が入力されなかったため、テストをスキップします。")
 
 
+# 📌 修正2: 循環参照を避けるため、reorder_output_dataframe をローカルで定義
+def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """出力データフレームの列順を調整し、特定の項目を左側に固定する。"""
+    fixed_leading_cols = [
+        'メールURL', '件名', '名前', '信頼度スコア', 
+        '本文(ファイル含む)', '本文(テキスト形式)', 'Attachments'
+    ]
+    fixed_leading_cols = [col for col in fixed_leading_cols if col in df.columns]
+    remaining_cols = [col for col in df.columns.tolist() if col not in fixed_leading_cols]
+    return df.reindex(columns=fixed_leading_cols + remaining_cols, fill_value='N/A')
+
+
 def actual_run_extraction_logic(root, main_elements, target_email, folder_path, status_label):
-    
-    global extracted_results_df
     
     try:
         pythoncom.CoInitialize()
@@ -86,8 +95,6 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         
         if df_mail_data.empty:
             status_label.config(text="状態: 処理対象のメールがありませんでした。", fg="green")
-            # 📌 抽出失敗時は保持データをクリア
-            extracted_results_df = None 
             return
 
         status_label.config(text="状態: 抽出コアロジック実行中...", fg="blue")
@@ -113,18 +120,22 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         for col in df_output.columns:
             df_output[col] = df_output[col].str.replace(r'^=', r"'=", regex=True)
 
-        # 📌 修正2: 抽出結果をグローバル変数に保存し、自動起動を削除
-        extracted_results_df = df_output 
+        # 📌 修正3: Excelファイルに出力
+        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+        df_output.to_excel(output_file_abs_path, index=False) 
 
-        messagebox.showinfo("完了", "抽出処理が正常に完了しました。\n検索一覧ボタンを押して結果を確認してください。")
-        status_label.config(text=f"状態: 処理完了。結果保持済み。", fg="green")
+        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{OUTPUT_FILENAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
+        status_label.config(text=f"状態: 処理完了。ファイル出力済み。", fg="green")
+        
+        # 📌 修正4: 抽出完了後、検索ボタンを有効化
+        search_button = main_elements.get("search_button")
+        if search_button:
+            search_button.config(state=tk.NORMAL)
         
         
     except Exception as e:
         status_label.config(text=f"状態: エラー発生 - {e}", fg="red")
-        messagebox.showerror("エラー", f"抽出処理中にエラーが発生しました: {e}")
-        # 📌 エラー発生時も保持データをクリア
-        extracted_results_df = None
+        messagebox.showerror("エラー", f"抽出処理中に予期せぬエラーが発生しました。\n詳細: {e}")
         
     finally:
         pythoncom.CoUninitialize()
@@ -174,16 +185,27 @@ def main():
             root, main_elements["account_entry"], main_elements["status_label"]
         )
         
-    # 📌 修正3: 検索一覧ボタンのコールバック関数を修正
+    # 📌 修正5: 検索一覧ボタンのコールバック関数 - ファイル読み込みでUIを起動
     def open_search_callback():
-        global extracted_results_df
+        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
         
-        if extracted_results_df is None:
-            messagebox.showwarning("警告", "抽出結果がありません。\n先に抽出を実行してください。")
+        if not os.path.exists(output_file_abs_path):
+            messagebox.showwarning("警告", f"抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。\n先に抽出を実行してください。")
             return
             
-        # 保持されたデータを使って検索ウィンドウを開く
-        gui_search_window.open_search_window(root, extracted_results_df)
+        try:
+            # メインウィンドウを隠す
+            root.withdraw() 
+            
+            # gui_search_window.py の main() 関数を呼び出す
+            gui_search_window.main()
+            
+        except Exception as e:
+            messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
+            traceback.print_exc()
+        finally:
+            # 検索ウィンドウが閉じられたら、元のメインウィンドウを再表示
+            root.deiconify() 
 
 
     def run_extraction_callback():
