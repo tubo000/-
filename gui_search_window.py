@@ -159,6 +159,8 @@ class App(tk.Tk):
                 '単金': '単価', 
                 'スキルor言語': 'スキル', 
                 '名前': '氏名', 
+                '本文(テキスト形式)':'本文',
+                '本文(ファイル含む)':'添付ファイル内容',
                 'メールURL': 'ENTRY_ID'
             }
             
@@ -168,13 +170,6 @@ class App(tk.Tk):
             elif '実働開始' not in df.columns:
                  df['実働開始'] = 'N/A'
                  
-            # '本文' カラムの優先度を明確化 (ファイル本文 > テキスト本文)
-            body_col_options = ['本文(ファイル含む)', '本文(テキスト形式)', '本文', '件名']
-            
-            for col in body_col_options:
-                if col in df.columns and col not in rename_map:
-                    rename_map[col] = '本文'
-                    break
             
             # その他のリネームを適用
             df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, errors='ignore')
@@ -350,34 +345,40 @@ class Screen2(ttk.Frame):
 
     def check_attachment_content(self, item_id):
         """選択行の添付ファイル内容を確認し、ボタンを有効/無効化する。"""
+        # 選択がない場合は無効化して終了
         if not item_id:
             self.btn_attachment_content.config(state='disabled')
             return
 
         is_content_available = False
         try:
+            # 1. 選択行のEntry IDを取得
             entry_id_col_index = list(self.tree['columns']).index('ENTRY_ID')
             tree_values = self.tree.item(item_id, 'values')
             entry_id = tree_values[entry_id_col_index]
             
+            # 2. DataFrameから対応する行を検索
             content_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
             
-            attachment_col_name = '本文' 
-            
-            if not content_row.empty and attachment_col_name in content_row.columns:
-                content = content_row[attachment_col_name].iloc[0]
+            # 3. 添付ファイル内容のデータを確認
+            if not content_row.empty and '添付ファイル内容' in content_row.columns:
+                content = content_row['添付ファイル内容'].iloc[0]
                 
+                # N/A, 空文字列, NaNをチェックし、有効なデータがあるか判定する
                 content_str = str(content).strip().lower()
-                if pd.notna(content) and content_str != '' and content_str != 'nan' and content_str != 'n/a':
+                
+                # 🚨 修正: pd.notnaかつ、文字列が空、'nan'、'n/a'のいずれでもないことをチェック
+                if pd.notna(content) and content_str not in ['', 'nan', 'n/a']:
                     is_content_available = True
             
         except (ValueError, IndexError, KeyError): 
-            pass 
+            pass # エラー時は無効化のまま
 
+        # 4. ボタンの状態を切り替え
         if is_content_available:
-            self.btn_attachment_content.config(state='normal')
+            self.btn_attachment_content.config(state='normal') # 有効化
         else:
-            self.btn_attachment_content.config(state='disabled')
+            self.btn_attachment_content.config(state='disabled') # 無効化
 
     def update_display_area(self, content_type):
         """本文または添付ファイル内容を下のテキストエリアに表示する"""
@@ -393,8 +394,12 @@ class Screen2(ttk.Frame):
             entry_id = tree_values[id_index]
             
             body_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
-            if not body_row.empty and '本文' in body_row.columns:
-                full_text = body_row['本文'].iloc[0]
+            if not body_row.empty and content_type in body_row.columns:
+                full_data = body_row[content_type].iloc[0]
+                
+                if pd.notna(full_data) and str(full_data).strip() != '':
+                    full_text = str(full_data)
+                full_text = full_text.replace('_x000D_', '')
                 # 📌 修正3: テキストエリア表示を1000文字に制限
                 email_body = str(full_text)[:1000]
                 if len(full_text) > 1000:
@@ -533,6 +538,7 @@ class Screen2(ttk.Frame):
             body_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
             if not body_row.empty and '本文' in body_row.columns:
                 full_text = body_row['本文'].iloc[0]
+                full_text = full_text.replace('_x000D_', '')
                 # 📌 修正5: テキストエリア表示を1000文字に制限
                 email_body = str(full_text)[:1000]
                 if len(full_text) > 1000:
