@@ -3,25 +3,12 @@
 #       各種フィルタリング（範囲、チェックボックス、キーワード）をリアルタイムで適用する。
 
 import tkinter as tk
-from tkinter import ttk, messagebox, Frame, Scrollbar, IntVar
+from tkinter import ttk
 import pandas as pd
 import os
-import re
+from email_processor import OUTPUT_FILENAME 
+from main import open_outlook_email_by_id
 
-# 外部定数をインポート
-# ⚠️ 注意: 実際のプロジェクトでは、config.py などからインポートしてください
-try:
-    from email_processor import OUTPUT_FILENAME 
-except ImportError:
-    OUTPUT_FILENAME = 'extracted_skills_result.xlsx' # 暫定値
-
-# 外部依存関数 (存在しないため、ダミーまたは外部ファイルからのインポートが必要)
-# 以下の関数は、別途 project の evaluator_core や extraction_core に存在する必要があります。
-def treeview_sort_column(tree, col, reverse): pass
-def safe_to_int(val): 
-    try: return int(val)
-    except: return None
-def apply_checkbox_filter(df, column_name, selected_items, keyword_list): return df.copy() 
 
 
 # ==============================================================================
@@ -336,12 +323,11 @@ class Screen2(ttk.Frame):
        
         ttk.Button(self, text="戻る (画面1へ)", command=master.show_screen1).grid(row=9, column=0, columnspan=2, padx=10, pady=10)
 
+
     def open_email_from_entry(self):
         """ID入力欄の値をENTRY_IDとして取得し、外部のOutlook連携関数を呼び出す。"""
         entry_id = self.id_entry.get().strip()
-        # main_application モジュール内の関数を呼び出す
-        import main_application
-        main_application.open_outlook_email_by_id(entry_id) 
+        open_outlook_email_by_id(entry_id) # I. ロジックから呼び出し
 
     def check_attachment_content(self, item_id):
         """選択行の添付ファイル内容を確認し、ボタンを有効/無効化する。"""
