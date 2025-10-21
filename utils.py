@@ -5,14 +5,12 @@ import pandas as pd
 import os
 import re
 import unicodedata 
-import tkinter as tk # GUIに依存しない関数のみを推奨
+import tkinter as tk 
 
 # 📌 修正1: config.py から必要な変数をインポート
 from config import CONFIG_FILE_PATH, TARGET_FOLDER_PATH, SCRIPT_DIR
-
-# ----------------------------------------------------
-# 構成ファイル処理
-# ----------------------------------------------------
+# 📌 修正2: extraction_core.py で定義した process_tanaka をインポート (ソート処理で使う可能性があるため)
+# from extraction_core import process_tanaka # NOTE: 相互インポートの回避のため、ここではインポートを省略し、ソートロジックを調整
 
 def load_config_csv():
     """name.csvからOutlookのアカウント名を読み込む"""
@@ -21,7 +19,6 @@ def load_config_csv():
         df.columns = [col.strip().replace('\xa0', '').replace('\u3000', '') for col in df.columns] 
         if not df.empty and 'AccountName' in df.columns and len(df) > 0:
             account = df['AccountName'].iloc[0]
-            # アカウント名の不要なスペース/制御文字を除去して返す
             return str(account).strip().replace('\xa0', '').replace('\u3000', ''), TARGET_FOLDER_PATH 
     except (pd.errors.EmptyDataError, FileNotFoundError):
         pass
@@ -39,48 +36,46 @@ def save_config_csv(account_name):
     except Exception as e:
         return False, f" 設定ファイルの保存に失敗しました: {e}"
 
-#正規表現の評価できるの形にする
-def clean_and_normalize(value: str, item_name: str) -> str:
-    """抽出した正規表現マッチ結果の値をクリーンアップし正規化する。"""
-    if not value or value.strip() == '': return 'N/A'
-    
-    # 全角/半角スペース、制御文字を統一
-    cleaned = value.strip().replace('\xa0', ' ').replace('\u3000', ' ')
-    cleaned = re.sub(r'[\s　]+', ' ', cleaned).strip()
-    
-    if item_name == '氏名': 
-        cleaned = re.sub(r'\s*\([^)]*\)', '', cleaned).strip() # (フリガナ)などを除去
-        cleaned = re.sub(r'様\s*$', '', cleaned).strip() # 末尾の '様' を除去
-    
-    elif item_name == '年齢' or item_name == '単金': 
-        # 抽出文字から数字、小数点、ハイフン、カンマ以外をすべて除去（safe_to_intで処理するために整形）
-        # ※ここでは範囲指定のハイフンは考慮しない
-        return re.sub(r'[^\d\.\-,]', '', cleaned).strip()
-        
-    elif item_name.startswith(('スキル_', '業務_')):
-        # 区切り文字をカンマに統一し、不要なスペースを除去
-        cleaned = re.sub(r'[・、/\\|,]', ',', cleaned)
-        cleaned = re.sub(r'\s*,\s*', ',', cleaned).strip(',')
-    
-    return cleaned
+# 📌 修正3: utils.py 内の clean_and_normalize は削除し、
+#          すべての抽出値のクリーンアップ/正規化は extraction_core.py の clean_and_normalize で一元管理します。
+#          これにより、この関数定義は削除されます。
+
 def treeview_sort_column(tv, col, reverse):
     """Treeviewのカラムソート処理。数値カラムのソートを強化し、小数点以下を排除。"""
     l = [(tv.set(k, col), k) for k in tv.get_children('')]
+    
     def try_convert(val):
-        if pd.isna(val) or val is None or val == 'N/A': return ''
-        if col in ['単金', '年齢']:
-            val_str = str(val).replace(',', '').replace('万円', '').replace('歳', '').strip()
+        if pd.isna(val) or val is None or val == 'N/A' or not str(val).strip(): return ''
+        
+        # 単金と年齢のソートロジックを調整
+        if col in ['年齢']:
+            val_str = str(val).replace(',', '').replace('歳', '').strip()
             try: 
-                val_str = unicodedata.normalize('NFKC', val_str)
-            except: pass
+                return int(float(unicodedata.normalize('NFKC', val_str)))
+            except ValueError: return val_str
+            
+        elif col in ['単金']:
+            val_str = str(val).strip()
+            val_str = unicodedata.normalize('NFKC', val_str).replace(',', '').replace('万', '')
+            
+            # 範囲指定（例: 40~50）の場合は、最初の数字をソートキーとする
+            range_match = re.search(r'(\d+)', val_str)
+            if range_match:
+                 try:
+                    return int(range_match.group(1))
+                 except ValueError: pass
+                 
             try:
-                # 整数に変換（小数点以下を切り捨て）
+                # 単一値の場合、そのまま整数に変換
                 return int(float(val_str))
             except ValueError: return val_str
+            
         if col == '信頼度スコア':
              try: return float(val)
              except ValueError: return str(val)
+             
         return str(val)
+        
     l.sort(key=lambda t: try_convert(t[0]), reverse=reverse)
     for index, (val, k) in enumerate(l):
         tv.move(k, '', index)

@@ -34,16 +34,17 @@ INTERMEDIATE_CSV_FILE = 'intermediate_mail_data.csv'
 CONFIG_FILE_PATH = os.path.join(SCRIPT_DIR, 'name.csv') 
 
 # ★★★ 評価・出力項目 ★★★
-EVALUATION_TARGETS = ['名前', '年齢', '単金', 'スキルor言語', '業種', '職務']
+EVALUATION_TARGETS = ['名前', '年齢', '単金','期間_開始' 'スキルor言語', '業種', '職務']
 MASTER_COLUMNS = [
-    'EntryID', '件名', '名前', '性別', '年齢', '単金', 
+    'EntryID', '件名', '名前', '性別', '年齢', '単金'
     'スキルor言語', '役割', 'マネジメント経験人数', '技術経験年数', '得意技術',
     '開発工程_要件定義', '開発工程_基本設計', '開発工程_詳細設計', 
     '開発工程_製造', '開発工程_結合テスト', '開発工程_システムテスト', 
     '開発工程_運用・保守', '開発工程_その他',
-    '業種', '職務', '期間_開始', '期間_終了', '人数', '開発ツール', 'OS', 
+    '業種', '職務', '期間_開始', '人数', '開発ツール', 'OS', 
     'フレームワーク/ライブラリ', 'データベース', 'その他', '備考', 
     '社名', '宛先メール', '開発手法', '信頼度スコア', '本文(テキスト形式)'
+    
 ]
 
 # ★★★ 辞書データ（ダミーデータ生成用） ★★★
@@ -71,12 +72,52 @@ MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材の�
 EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請']
 # ----------------------------------------------------
 
+# --- 高度な年齢/単金抽出のための正規表現の定義 ---
+# 年齢の正規表現 
+AGE_PATTERN_2_DIGITS = r'([2-9][0-9])'
+NEGATIVE_LOOKAHEAD_DATE = r'(?!\s*(?:年|月|日|/|-|\)))'
 
-# ★★★ 正規表現パターン (ゼロ化/スペース除去後の本文に適合) ★★★
+# 年齢の多様なパターン（必須キーワード付き、単位付き、単位なし）
+RE_AGE_KEYWORD = r'[【\[（\(]?\s*年\s*齢\s*[】\]）\)]?[\s:：]*' + AGE_PATTERN_2_DIGITS + r'[歳才]'
+RE_AGE_PARENTHESIS = r'[a-zA-Z\s\.]+ *[（\(].*?' + AGE_PATTERN_2_DIGITS + r'[歳才].*?[）\)]' 
+RE_AGE_AFTER_NAME = r'[a-zA-Z\s\.]+\s+' + AGE_PATTERN_2_DIGITS + r'[歳才]'
+RE_AGE_KEYWORD_NO_UNIT = r'[【\[（\(]?\s*年\s*齢\s*[】\]）\)]?[\s:：]*' + AGE_PATTERN_2_DIGITS + NEGATIVE_LOOKAHEAD_DATE
+#優先順位
+RE_AGE_PATTERNS = [
+RE_AGE_KEYWORD, RE_AGE_PARENTHESIS, RE_AGE_AFTER_NAME, RE_AGE_KEYWORD_NO_UNIT
+] # 抽出関数で使用
+
+# 単金の正規表現 
+KEYWORD_TANAKA = r'(?:単金|単価|希望単価|【単金】|【単価】|金額)' 
+PREFIX_TANAKA = r'.{0,5}' + KEYWORD_TANAKA 
+
+# 1. キーワード付きパターン (優先度順: 範囲指定 > 単一値)
+RE_TANAKA_RANGE_KEYWORD = PREFIX_TANAKA + r'[：:\s]*([\d\.,]+万?[～~-][\d\.,]+万?円?)'
+RE_TANAKA_VALUE_MAN_KEYWORD = PREFIX_TANAKA + r'[：:\s]*([\d\.,]+万)'
+RE_TANAKA_VALUE_YEN_KEYWORD = PREFIX_TANAKA + r'[：:\s]*([\d\.,]+円)'
+#優先順位
+RE_TANAKA_KW_PATTERNS = [
+    RE_TANAKA_RANGE_KEYWORD, RE_TANAKA_VALUE_MAN_KEYWORD, RE_TANAKA_VALUE_YEN_KEYWORD
+] # 抽出関数で使用
+
+# 2. キーワードなし (RAW) パターン (優先度順: 00~00万 > 00万 > 00~00 > 00)
+RE_TANAKA_RANGE_MAN_RAW = r'(?:\D|^)([\d\.,]+万?[～~-][\d\.,]+万)(?:\D|$)' 
+RE_TANAKA_VALUE_MAN_RAW = r'(?:\D|^)([\d\.,]+万)(?:\D|$)' 
+RE_TANAKA_RANGE_RAW_NO_MAN = r'(?:\D|^)([\d\.,]+[～~-][\d\.,]+)(?:\D|$)'
+RE_TANAKA_VALUE_RAW = r'(?:\D|^)([\d\.,]{5,})(?:\D|$)' 
+RE_TANAKA_RAW_PATTERNS = [
+RE_TANAKA_RANGE_MAN_RAW, RE_TANAKA_VALUE_MAN_RAW, RE_TANAKA_RANGE_RAW_NO_MAN, RE_TANAKA_VALUE_RAW
+] # 抽出関数で使用
+
+
+# ★★★ 正規表現パターン (旧ロジック。名前とその他の項目は維持) ★★★
+# 💡 名前とその他の項目のパターンは、この定数に集約されているため、そのまま使用します。
+#    年齢と単金のパターンは、上記の高度な正規表現（RE_AGE_PATTERNS, RE_TANAKA_KW_PATTERNS, etc.）を使用するため、
+#    この辞書内のパターンは、**抽出ロジックで無視**されますが、定義は残します。
 ITEM_PATTERNS = {
     '名前': {'pattern': r'(?:名前|氏名)[:：]\s*([^\n\r]+?)(?:\s*(?:年齢|単金|スキル|備考|社名|$))', 'score': 100}, 
-    '年齢': {'pattern': r'年齢[:：]\s*(\d+)\s*歳', 'score': 100}, 
-    '単金': {'pattern': r'単金[:：]\s*([,\d]+)\s*(?:万|円/月|\(.*\))?', 'score': 100}, 
+    '年齢': {'pattern': r'年齢[:：]\s*([\d\s\-\-～~]+)\s*(?:歳|代)?', 'score': 100}, # ダミー/旧パターン
+    '単金': {'pattern': r'単金[:：]\s*([\d,\s\.\-～~]+)\s*(?:万|円/月|\(.*\))?', 'score': 100}, # ダミー/旧パターン
     '性別': {'pattern': r'(?:名前|氏名)[:：].*?\((男性|女性|Male|Female)\)', 'score': 50}, 
     'スキルor言語': {'pattern': r'(?:スキル|【言語】)[:：]\s*(.*?)(?:【業務】|備考|-{5,}|$)', 'score': 100},
     'OS': {'pattern': r'(?:【OS】|OS|環境OS)[:：]\s*([^\n\r]+?)(?:データベース|フレームワーク|$)', 'score': 100},
@@ -84,15 +125,13 @@ ITEM_PATTERNS = {
     'フレームワーク/ライブラリ': {'pattern': r'(?:フレームワーク/ライブラリ|FW)[:：]\s*([^\n\r]+?)(?:開発ツール|$)', 'score': 100},
     '開発ツール': {'pattern': r'(?:ツール|開発ツール)[:：]\s*([^\n\r]+?)(?:得意技術|$)', 'score': 100},
     '得意技術': {'pattern': r'得意技術[:：]\s*([^\n\r]+?)(?:役割|期間|$)', 'score': 80},
-    '役割': {'pattern': r'(?:役割|役職|ポジション|PMO)[:：]\s*([^\n\r]+?)(?:\s*(?:マネジメント経験人数|技術経験年数|期間|$))', 'score': 80},
+    '役割': {'pattern': r'(?:役割|役職|ポジション|PMO|職種)[:：]\s*([^\n\r]+?)(?:\s*(?:マネジメント経験人数|技術経験年数|期間|$))', 'score': 80},
     'マネジメント経験人数': {'pattern': r'(?:マネジメント|管理経験|管理人数).*?(\d+)\s*名', 'score': 80},
     '技術経験年数': {'pattern': r'経験年数[:：]\s*(\d+)\s*年', 'score': 80},
     '開発手法': {'pattern': r'(?:開発手法|開発プロセス)[:：](Agile|アジャイル|Waterfall|ウォーターフォール)', 'score': 80},
     '業種': {'pattern': r'(?:【業務】|業務知識|業種)[:：]\s*([^\n\r]+?)(?:\s*(?:職務|期間|備考|$))', 'score': 100},
     '職務': {'pattern': r'(?:職務|職種|担当業務)[:：]\s*([^\n\r]+?)(?:\s*(?:期間|人数|$))', 'score': 80},
-    '期間_開始': {'pattern': r'期間[:：]\s*(\d{4}[/-]\d{1,2})', 'score': 80}, 
-    '期間_終了': {'pattern': r'期間[:：].*?~?\s*(\d{4}[/-]\d{1,2}|現在)', 'score': 80}, 
-    '人数': {'pattern': r'(?:人数|メンバー数)[:：]\s*(\d+)', 'score': 80},
+    '期間_開始': {'pattern': r'期間[:：]\s*(?:(\d{4}[\s\/\-]\d{1,2})|(\d{1,2}月))', 'score': 80},
     '備考': {'pattern': r'(?:備考|特記事項)[:：]\s*([^\n\r]+?)(?:社名|$)', 'score': 50},
     '社名': {'pattern': r'(?:社名|所属会社|所属)[:：]\s*([^\n\r]+?)(?:宛先メール|$)', 'score': 50},
     '宛先メール_本文内': {'pattern': r'(?:Email|連絡先)[:：]([^\s\n]+@[^\s\n]+)', 'score': 50},
