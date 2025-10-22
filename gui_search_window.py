@@ -7,8 +7,7 @@ from tkinter import ttk
 import pandas as pd
 import os
 from email_processor import OUTPUT_FILENAME 
-from main import open_outlook_email_by_id
-
+import main_application
 
 
 # ==============================================================================
@@ -26,8 +25,8 @@ def create_sample_data():
         '本文': [f'これはメール本文{i}です。詳細情報や経歴はこの本文に記述されています。非常に長いメール本文を想定しています。' for i in range(1, 11)],
         '年齢': [25, 30, 45, 33, 28, 50, 40, 37, 22, 35], 
         '単価': [50, 65, 70, 55, 60, 80, 75, 50, 60, 70],
-        '実働開始': ['2024年05月', '2025年01月', '2024年07月', '2024年03月', '2025年06月', 
-                   '2024年01月', '2025年03月', '2024年11月', '2024年02月', '2025年02月'],
+        '実働開始': ['202405', '202501', '202407', '202403', '202506', 
+                   '2024年01', '202503', '202411', '202402', '202502'],
     }
     return pd.DataFrame(data)
 
@@ -72,7 +71,7 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
     """キーワードリストを用いて、指定された列に対してAND検索を実行する。"""
     if df.empty or not keywords: return df
     # キーワード検索の対象列: ENTRY_ID, 氏名, スキルと本文の範囲検索以外の全ての列
-    search_cols = [col for col in df.columns if col  in ['氏名', 'スキル','本文']]
+    search_cols = [col for col in df.columns if col  in ['スキル','件名','本文','添付ファイル内容']]
     df_search = df[search_cols].astype(str).agg(' '.join, axis=1).str.lower()
     
     filter_condition = pd.Series([True] * len(df), index=df.index)
@@ -95,8 +94,8 @@ class App(tk.Tk):
         super().__init__()
         self.title("スキルシート検索アプリ")
         #ウィンドウを中央に配置するロジック
-        window_width = 900
-        window_height = 700
+        window_width = 700
+        window_height = 500
         screen_width = self.winfo_screenwidth()
         screen_height = self.winfo_screenheight()
         center_x = int(screen_width/2 - window_width/2)
@@ -109,7 +108,7 @@ class App(tk.Tk):
         self.all_cands = {
             'age': [str(i) for i in range(20, 71, 5)], 
             'price': [str(i) for i in range(50, 101, 10)],
-            'start': ['2024年01月', '2024年04月', '2024年07月', '2024年10月', '2025年01月', '2025年04月']
+            'start': ['202401', '202404', '202407', '202410', '202501', '202504']
         }
         
         # データ読み込み
@@ -127,6 +126,7 @@ class App(tk.Tk):
     def on_closing(self):
         """ウィンドウを閉じる際の処理（main_applicationに戻る）"""
         self.destroy()
+        
 
     def _load_data(self, file_path):
         """データファイルを読み込み、必要な列名をリネーム・クリーンアップする"""
@@ -146,17 +146,11 @@ class App(tk.Tk):
                 '単金': '単価', 
                 'スキルor言語': 'スキル', 
                 '名前': '氏名', 
+                '期間_開始':'実働開始',
                 '本文(テキスト形式)':'本文',
                 '本文(ファイル含む)':'添付ファイル内容',
                 'メールURL': 'ENTRY_ID'
             }
-            
-            # 期間カラムのリネームを確実に適用し、ない場合は 'N/A' を設定
-            if '期間_開始' in df.columns:
-                 df = df.rename(columns={'期間_開始': '実働開始'}, errors='ignore')
-            elif '実働開始' not in df.columns:
-                 df['実働開始'] = 'N/A'
-                 
             
             # その他のリネームを適用
             df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, errors='ignore')
@@ -217,11 +211,21 @@ class Screen1(ttk.Frame):
         self.create_range_input('単価 (万円) 範囲指定', 'price', row=2)
         ttk.Label(self, text="年齢 (歳) 範囲指定").grid(row=4, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
         self.create_range_input('年齢 (歳) 範囲指定', 'age', row=4)
-        ttk.Label(self, text="実働開始 範囲指定 (YYYY年MM月)").grid(row=6, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
-        self.create_range_input('実働開始 範囲指定 (YYYY年MM月)', 'start', row=6)
+        ttk.Label(self, text="実働開始 範囲指定 (YYYYMM)").grid(row=6, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
+        self.create_range_input('実働開始 範囲指定 (YYYYMM)', 'start', row=6)
 
-        self.rowconfigure(8, weight=1) 
-        ttk.Button(self, text="検索 (画面2へ)", command=master.show_screen2).grid(row=9, column=0, columnspan=2, padx=10, pady=10,)
+        self.rowconfigure(8, weight=1)        
+        # 📌 修正1: ボタンを格納するためのフレームを作成
+        # 検索ボタンと戻るボタンを配置するフレーム
+        button_frame = ttk.Frame(self)
+        button_frame.grid(row=9, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
+       
+        # 検索ボタン (右寄せ)
+        ttk.Button(button_frame, text="検索 (画面2へ)", command=master.show_screen2).pack(side=tk.RIGHT, padx=5)
+       
+        # 📌 修正2: 「抽出画面に戻る」ボタンを master.destroy に設定
+        #          (master == App インスタンス)
+        ttk.Button(button_frame, text="抽出画面に戻る", command=self.master.destroy).pack(side=tk.LEFT, padx=5)
 
     def create_range_input(self, label_text, key, row):
         """範囲指定用の入力フィールド（ComboboxまたはEntry）を作成する"""
@@ -327,7 +331,7 @@ class Screen2(ttk.Frame):
     def open_email_from_entry(self):
         """ID入力欄の値をENTRY_IDとして取得し、外部のOutlook連携関数を呼び出す。"""
         entry_id = self.id_entry.get().strip()
-        open_outlook_email_by_id(entry_id) # I. ロジックから呼び出し
+        main_application.open_outlook_email_by_id(entry_id) # I. ロジックから呼び出し
 
     def check_attachment_content(self, item_id):
         """選択行の添付ファイル内容を確認し、ボタンを有効/無効化する。"""
@@ -404,15 +408,40 @@ class Screen2(ttk.Frame):
     #タグ管理
     def draw_tags(self):
         for widget in self.tag_frame.winfo_children(): widget.destroy()
-        for keyword in self.master.keywords: self.create_tag(keyword)
+        
+        # 1. キーワードタグの描画 (削除ボタンあり)
+        for keyword in self.master.keywords: self.create_tag(keyword, is_keyword=True)
+        
+        # 2. 範囲指定タグの描画 (削除ボタンなし)
+        range_map = {
+            'age': '年齢', 
+            'price': '単価', 
+            'start': '実働開始'
+        }
+        
+        for key, label in range_map.items():
+            lower = self.master.range_data[key]['lower']
+            upper = self.master.range_data[key]['upper']
+            
+            if lower or upper: # 下限または上限のいずれかがあればタグを作成
+                # 表示形式: 項目名: 下限値~上限値
+                tag_text = f"{label}: {lower or '下限なし'}~{upper or '上限なし'}"
+                # 範囲タグは削除できない（×ボタンなし）
+                self.create_tag(tag_text, is_keyword=False, range_key=key) 
+
     
-    def create_tag(self, keyword):
+    def create_tag(self, text, is_keyword, range_key=None):
+        """タグ（キーワードまたは範囲指定）を作成する"""
         tag_container = ttk.Frame(self.tag_frame, relief='solid', borderwidth=1)
         tag_container.pack(side='left', padx=(5, 0), pady=2)
-        ttk.Label(tag_container, text=keyword, padding=(5, 2)).pack(side='left')
-        ttk.Button(tag_container, text='×', width=2, command=lambda k=keyword: self.remove_tag(k)).pack(side='right')
+        ttk.Label(tag_container, text=text, padding=(5, 2)).pack(side='left')
+        
+        # キーワードタグの場合のみ削除ボタンを作成
+        if is_keyword:
+            ttk.Button(tag_container, text='×', width=2, command=lambda k=text: self.remove_tag(k)).pack(side='right')
 
     def remove_tag(self, keyword):
+        """キーワードタグを削除し、フィルタリングを再実行する"""
         if keyword in self.master.keywords:
             self.master.keywords.remove(keyword)
             self.draw_tags()
@@ -432,18 +461,22 @@ class Screen2(ttk.Frame):
         
     #Treeviewと検索
     def setup_treeview(self):
-        cols_to_display = ['ENTRY_ID', '氏名', 'スキル', '年齢', '単価', '実働開始'] 
+        cols_to_display = ['受信日時','件名' ,'スキル', '年齢', '単価', '実働開始'] 
         self.tree = ttk.Treeview(self, columns=cols_to_display, show='headings')
+        all_columns = ['ENTRY_ID'] + cols_to_display 
+        self.tree = ttk.Treeview(self, columns=all_columns, show='headings')
         
         for col in cols_to_display:
             self.tree.heading(col, text=col)
             
-            if col in ['年齢', '単価']: width_val = 60
-            elif col in ['ENTRY_ID', '実働開始']: width_val = 120
-            elif col in ['スキル', '氏名']: width_val = 150
+            if col in ['年齢', '単価']: width_val = 40
+            elif col in ['実働開始']: width_val = 50
+            elif col in ['スキル','件名']: width_val = 150
             else: width_val = 100
-                
             self.tree.column(col, width=width_val, anchor='w')
+
+        self.tree.column('ENTRY_ID', width=0, stretch=tk.NO) 
+        self.tree.heading('ENTRY_ID', text='')
             
         vsb = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=vsb.set)
@@ -464,11 +497,30 @@ class Screen2(ttk.Frame):
                 # 存在しない属性 (カラム) は 'N/A' を返す
                 val = getattr(row, col, 'N/A')
                 
-                # 📌 修正4: Treeviewに挿入する本文（またはスキル）は1000文字に制限
-                if col in ['本文']: # Treeview に本文カラムがある場合
-                    values.append(str(val)[:1000])
-                else:
-                    values.append(val)
+                # 📌 修正1: 「年齢」カラムの値を整数に変換し、NaNを空文字列に置き換える
+                if col == '年齢':
+                    if pd.notna(val):
+                        try:
+                            # 整数型に変換し、小数点以下を切り捨てる
+                            val = int(float(val))
+                        except (ValueError, TypeError):
+                            # 変換エラーが発生した場合は元の値をそのまま表示（または空欄にする）
+                            val = str(val) 
+
+                if col == '受信日時':
+                    if pd.notna(val) and str(val).strip() != '':
+                        val_str = str(val).split(' ')[0] # スペースで分割し、最初の要素（日付）を取得
+                        # 2025-10-03 のような形式を想定
+                        val = val_str
+                    else:
+                        val = '' # データがない場合は空欄にする
+
+                # Treeviewのデータ挿入ロジック
+
+
+                # 📌 修正2: Treeviewのデータ挿入ロジックは他の修正を反映し、シンプルにする
+                #           (本文の文字数制限ロジックは Treeview に本文カラムが無いため一旦除外)
+                values.append(val)
                 
             try:
                 self.tree.insert('', 'end', values=values)
@@ -548,8 +600,9 @@ class Screen2(ttk.Frame):
 def main():
     """アプリケーションのメイン実行関数。この関数が呼び出されるとGUIが起動する。"""
     # 📌 修正6: ファイルパスを絶対パスとして渡す
-    app = App(file_path=os.path.abspath(OUTPUT_FILENAME)) 
+    app = App(file_path=os.path.abspath(OUTPUT_FILENAME))
     app.mainloop()
 
 if __name__ == "__main__":
+    # main関数は引数なしで呼ぶと App を Tk として初期化する
     main()
