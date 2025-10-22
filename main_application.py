@@ -1,4 +1,4 @@
-# main_application.py (GUI統合とメイン実行フロー - 最終統合版)
+# main_application.py (GUI統合とメイン実行フロー - 最終安定版)
 
 import os
 import sys
@@ -19,12 +19,11 @@ import gui_search_window
 import utils 
 
 # 既存の内部処理関数をインポート
-# config.py からの定数インポートは維持
 from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
 from extraction_core import extract_skills_data
 from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
-# email_processor.py からのインポート (件名・本文・日時が揃ったデータを取得)
 from email_processor import get_mail_data_from_outlook_in_memory, OUTPUT_FILENAME 
+from email_processor import has_unprocessed_mail 
 
 
 # ----------------------------------------------------
@@ -59,23 +58,17 @@ def open_outlook_email_by_id(entry_id: str):
 
 
 def interactive_id_search_test():
-    """GUIのメニューなどから呼び出されるEntry ID検索機能。"""
-    test_entry_id = simpledialog.askstring("Entry ID テスト", 
-                                          "テスト用の Entry ID をペーストしてください:", 
-                                          initialvalue="")
-    if test_entry_id:
-        open_outlook_email_by_id(test_entry_id.strip())
-    else:
-        messagebox.showinfo("テストスキップ", "Entry ID が入力されなかったため、テストをスキップします。")
+    """GUIのメニューなどから呼び出されるEntry ID検索機能。（無効化済み）"""
+    pass
 
 
 def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """出力データフレームの列順を調整し、'受信日時'と本文カラムを左側に固定する。"""
+    """出力データフレームの列順を調整し、'受信日時'と本文カラムを左側に固定する。（ローカル定義）"""
     fixed_leading_cols = [
         'メールURL', '受信日時', '件名', '名前', '信頼度スコア', 
         '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments'
     ]
-    fixed_leading_cols = [col for col in fixed_leading_cols if col in df.columns]
+    fixed_leading_cols = [col for col in df.columns]
     remaining_cols = [col for col in df.columns.tolist() if col not in fixed_leading_cols]
     return df.reindex(columns=fixed_leading_cols + remaining_cols, fill_value='N/A')
 
@@ -91,7 +84,7 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         pass 
         
     try:
-        # 期間指定モードの入力値チェック (維持)
+        # 期間指定モードの入力値チェック
         days_ago = None
         if read_mode == "days":
             try:
@@ -106,7 +99,6 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         status_label.config(text=f"状態: {target_email} アカウントからメール取得中 ({mode_text})...")
         
         # 読み込みモードと日数を渡す
-        # df_mail_data には 'EntryID', '件名', '受信日時', '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments' が含まれるようになった
         df_mail_data = get_mail_data_from_outlook_in_memory(
             folder_path, 
             target_email, 
@@ -114,40 +106,30 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
             days_ago=days_ago 
         )
         
+        # 🚨 修正: 処理対象が0件の場合
         if df_mail_data.empty:
             status_label.config(text="状態: 処理対象のメールがありませんでした。")
             messagebox.showinfo("完了", "処理対象のメールがありませんでした。")
             return
 
         status_label.config(text="状態: 抽出コアロジック実行中...")
-        # df_extracted には抽出結果(信頼度スコアやスキル名)が追加される
         df_extracted = extract_skills_data(df_mail_data)
         
-        # ----------------------------------------------------
-        # 📌 修正ロジックの再確認: df_mail_dataには本文・件名・日時が全て含まれる
-        # df_extractedは df_mail_data を基に作られているため、本文/件名は継承されているはず。
-        # ここでは、extract_skills_dataによって失われた可能性のある '受信日時' を念のためマージし直す。
-        # ----------------------------------------------------
-        
+        # Excel出力処理の準備
+        DATE_COLUMN = '受信日時'
         df_output = df_extracted.copy()
-        
-        # 必要なカラムを元のデータから取得（日時とキー）。件名・本文は df_extracted に残っている前提。
         date_key_df = df_mail_data[['EntryID', '受信日時']].copy()
         
-        # 抽出結果と日時情報を EntryID でマージ
-        # マージ前に df_output から '受信日時' を削除し、df_mail_data の日時情報で上書きする
-        if '受信日時' in df_output.columns:
-            df_output.drop(columns=['受信日時'], inplace=True, errors='ignore')
+        # 受信日時カラムをマージするために古いカラムをドロップし、新しいカラムをマージ
+        if DATE_COLUMN in df_output.columns:
+            df_output.drop(columns=[DATE_COLUMN], inplace=True, errors='ignore')
             
-        df_output = pd.merge(
-            df_output,
-            date_key_df,
-            on='EntryID',
-            how='left' 
-        )
+        df_output = pd.merge(df_output, date_key_df, on='EntryID', how='left')
 
         # EntryIDをURLに変換
         if 'EntryID' in df_output.columns and 'メールURL' not in df_output.columns:
+             # EntryID の値を一時的なカラム 'EntryID_temp' にコピー
+             df_output.insert(df_output.columns.get_loc('EntryID') + 1, 'EntryID_temp', df_output['EntryID'])
              df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
 
         # 列順の整理
@@ -157,16 +139,68 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         df_output = df_output.drop(columns=final_drop_list, errors='ignore')
         
         # 受信日時カラムを保護しつつ、他の文字列をエスケープ
-        DATE_COLUMN = '受信日時'
-        
         for col in df_output.columns:
-            # 日付カラムではない、かつオブジェクト型（文字列）のカラムのみエスケープ
             if col != DATE_COLUMN and df_output[col].dtype == object:
                 df_output[col] = df_output[col].str.replace(r'^=', r"'=", regex=True)
                 
-        # Excelファイルへの書き出し
+        # ----------------------------------------------------
+        # ★★★ Excel 既存ファイルへの追記ロジック (上書き解消) ★★★
+        # ----------------------------------------------------
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
-        df_output.to_excel(output_file_abs_path, index=False) 
+        df_final = df_output.copy() 
+
+        if os.path.exists(output_file_abs_path):
+            try:
+                # 既存データを読み込む (dtype=str で安全に読み込む)
+                df_existing = pd.read_excel(output_file_abs_path, dtype=str)
+                
+                if 'メールURL' in df_existing.columns:
+                    # 既存データから EntryID をクリーンアップし、比較用の列を作成
+                    df_existing['TempEntryID'] = df_existing['メールURL'].str.replace('outlook:', '', regex=False).str.strip()
+                    
+                    # 今回抽出された EntryID リストを安全に取得
+                    current_entry_ids = df_output['EntryID_temp'].str.replace('outlook:', '', regex=False).tolist()
+
+                    # 重複しない既存のレコードのみを保持
+                    df_existing_unique = df_existing[~df_existing['TempEntryID'].isin(current_entry_ids)].copy()
+                    
+                    # 結合のために不要な列を削除
+                    df_existing_unique.drop(columns=['TempEntryID'], errors='ignore', inplace=True)
+                    
+                    # 既存データの受信日時を datetime に変換し直す
+                    if DATE_COLUMN in df_existing_unique.columns:
+                         df_existing_unique[DATE_COLUMN] = pd.to_datetime(df_existing_unique[DATE_COLUMN], errors='coerce')
+
+                    # 新しいデータ (df_final) を最上部にして連結
+                    df_final = pd.concat([df_final, df_existing_unique], ignore_index=True)
+                else:
+                    # メールURLがない場合、単純に追記（重複チェックなし）
+                    df_final = pd.concat([df_final, df_existing], ignore_index=True)
+                    
+            except Exception as e:
+                print(f"❌ 既存Excelファイル読み込み/追記中にエラー発生。新しいデータのみ保存: {e}")
+                df_final = df_output # 失敗した場合、新しいデータのみを保存
+        
+        # ----------------------------------------------------
+        # 最終調整と書き出し
+        # ----------------------------------------------------
+        
+        # 1. 受信日時をDateTime型に変換し、降順でソート（最新が一番上）
+        if DATE_COLUMN in df_final.columns:
+            df_final[DATE_COLUMN] = pd.to_datetime(df_final[DATE_COLUMN], errors='coerce')
+            df_final = df_final.sort_values(by=DATE_COLUMN, ascending=False).reset_index(drop=True)
+        
+        # 2. 最後にEntryIDカラムを完全に削除してからExcelに書き出し
+        final_drop_list_after_merge = ['EntryID', 'EntryID_temp'] # EntryID_temp も忘れずに削除
+        df_final = df_final.drop(columns=final_drop_list_after_merge, errors='ignore')
+        
+        # 3. Excel書き出し用に日時型を文字列形式に戻す (Excelでの表示安定化)
+        if DATE_COLUMN in df_final.columns and df_final[DATE_COLUMN].dtype != object:
+            df_final[DATE_COLUMN] = df_final[DATE_COLUMN].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
+        
+        # Excelファイルへの書き出し (常に最終結果で上書き)
+        df_final.to_excel(output_file_abs_path, index=False) 
+        # ----------------------------------------------------
 
         messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{OUTPUT_FILENAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
         status_label.config(text=f"状態: 処理完了。ファイル出力済み。")
@@ -246,6 +280,7 @@ def actual_run_file_deletion_logic(days_entry, status_label):
         # 1. ファイルを読み込み (Excel出力のため read_excel を使用)
         df = pd.read_excel(output_file_path)
         
+        # 📌 修正1: '受信日時' カラムの存在チェック
         if DATE_COLUMN not in df.columns:
             raise KeyError(f"削除基準となる '{DATE_COLUMN}' カラムがファイルに見つかりません。抽出実行後、ファイルに日付カラムがあるか確認してください。")
 
@@ -255,16 +290,19 @@ def actual_run_file_deletion_logic(days_entry, status_label):
         # 3. フィルタリングと削除
         initial_count = len(df)
         
-        # '受信日時' カラムを datetime 型に変換
+        # '受信日時' カラムを datetime 型に変換 (エラーは NaT に)
         df['受信日時_dt'] = pd.to_datetime(df[DATE_COLUMN], errors='coerce') 
         
-        # 日付変換に成功し、かつカットオフ日より新しいレコードを保持
+        # 日付変換に成功し、かつカットオフ日より【新しい】レコードを保持
         df_kept = df[df['受信日時_dt'].notna() & (df['受信日時_dt'] >= cutoff_date)].copy()
         
         deleted_count = initial_count - len(df_kept)
         
         # 4. ファイルを上書き保存
         df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True) # テンポラリカラムを削除
+        
+        # 📌 修正2: Excel書き出し時に日付の書式を Pandas に任せる（dtype=datetime）
+        #   Pandasは日付型のSeriesをExcelに書き出す際、適切な形式を自動的に適用します。
         df_kept.to_excel(output_file_path, index=False)
         
         messagebox.showinfo("削除完了", f"ファイルから {days_ago}日より古いレコード {deleted_count} 件を削除しました。\n残レコード数: {len(df_kept)} 件")
@@ -310,7 +348,6 @@ def main():
     main_elements = {} 
     
     def open_settings_callback():
-        # gui_elements.py の open_settings_window を呼び出す
         gui_elements.open_settings_window(
             root, main_elements["account_entry"], main_elements["status_label"]
         )
@@ -377,9 +414,11 @@ def main():
     # 検索一覧ボタン (前回同様に無効化から開始)
     def open_search_callback():
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+        
         if not os.path.exists(output_file_abs_path):
             messagebox.showwarning("警告", f"抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。\n先に抽出を実行してください。")
             return
+            
         try:
             root.withdraw() 
             gui_search_window.main()
@@ -387,7 +426,8 @@ def main():
             messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
             traceback.print_exc()
         finally:
-            root.deiconify() 
+            # 復元処理
+            root.after(0, root.deiconify)
     
     search_button = ttk.Button(
         process_frame, 
@@ -430,6 +470,41 @@ def main():
         "extract_days_entry": extract_days_entry, 
         "settings_button": settings_button, 
     }
+    
+    # ----------------------------------------------------
+    # 起動時の処理
+    # ----------------------------------------------------
+    output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+    
+    if os.path.exists(output_file_abs_path):
+        search_button.config(state=tk.NORMAL)
+        status_label.config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
+    
+    def check_unprocessed_async(account_email, folder_path, status_label):
+        
+        try:
+            unprocessed_count = has_unprocessed_mail(folder_path, account_email)
+            
+            if unprocessed_count > 0:
+                final_message = f"状態: {unprocessed_count}件の新規未処理メールがあります"
+            else:
+                if os.path.exists(output_file_abs_path):
+                    final_message = "状態: 抽出結果ファイルあり。未処理メールはありません。"
+                else:
+                    final_message = "状態: 対象のメールはありません" 
+                
+            root.after(0, lambda: status_label.config(text=final_message))
+
+        except Exception as e:
+            error_msg = f"状態: バックグラウンドチェックエラー - {e}"
+            root.after(0, lambda: status_label.config(text=error_msg))
+            root.after(0, lambda: print(f"未処理チェックスレッドでエラーが発生: {e}"))
+            
+            if not os.path.exists(output_file_abs_path):
+                root.after(0, lambda: status_label.config(text="状態: 待機中（チェックエラー）。"))
+    
+    # 起動時のチェックを開始
+    threading.Thread(target=lambda: check_unprocessed_async(saved_account, saved_folder, status_label)).start()
     
     # 6. アプリケーションの開始
     root.mainloop()
