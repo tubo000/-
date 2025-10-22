@@ -54,6 +54,23 @@ def treeview_sort_column(tv, col, reverse):
                 return int(float(unicodedata.normalize('NFKC', val_str)))
             except ValueError: return val_str
             
+        elif col in ['期間_開始']:
+            val_str = str(val).lower().strip()
+            
+            # 優先度: YYYYMM (古い順) < 即日 < Nヶ月 (短い順) < 要調整 < n/a
+            if re.match(r'^\d{6}$', val_str): # YYYYMM 形式
+                # 0をプレフィックスとして最も古い順にソートされるようにする
+                return f"0{val_str}" 
+            elif '即日' in val_str or 'asap' in val_str:
+                return "1即日"
+            elif month_match := re.search(r'(\d+)[ヶか]月', val_str):
+                # Nヶ月。短い期間を優先するため、2の後にゼロ埋めしたNを付与
+                return f"2{month_match.group(1).zfill(3)}ヶ月"
+            elif '調整' in val_str or '相談' in val_str or '要' in val_str:
+                return "3要調整"
+            else:
+                return "9n/a"
+            
         elif col in ['単金']:
             val_str = str(val).strip()
             val_str = unicodedata.normalize('NFKC', val_str).replace(',', '').replace('万', '')
@@ -69,6 +86,7 @@ def treeview_sort_column(tv, col, reverse):
                 # 単一値の場合、そのまま整数に変換
                 return int(float(val_str))
             except ValueError: return val_str
+        
             
         if col == '信頼度スコア':
              try: return float(val)

@@ -180,6 +180,7 @@ def run_triple_csv_validation(df_extracted: pd.DataFrame, master_path: str, outp
 
     # 最終出力列の順序を決定
     output_cols = ['EntryID'] 
+    
     for c in EVALUATION_TARGETS:
         if f'{c}_E' in merged_df.columns: output_cols.append(f'{c}_E')
         if f'{c}_M' in merged_df.columns: output_cols.append(f'{c}_M')
