@@ -1,4 +1,4 @@
-# main_application.py (GUI統合とメイン実行フロー - 最終安定版)
+# main_application.py (GUI統合とメイン実行フロー - Toplevel修正版)
 
 import os
 import sys
@@ -12,20 +12,22 @@ import re
 import traceback 
 import os.path
 import datetime 
+import queue # 📌 スレッドセーフなキュー
 
 # 外部モジュールのインポート
 import gui_elements
-import gui_search_window 
+import gui_search_window # 📌 Appクラスをインポートするために使用
 import utils 
 
 # 既存の内部処理関数をインポート
 from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
 from extraction_core import extract_skills_data
 from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
+# 📌 修正1: OUTPUT_FILENAME を config からエイリアスとしてインポート
+# ✅ 修正後 (email_processor.py の XLSX ファイルを参照)
 from email_processor import get_mail_data_from_outlook_in_memory, OUTPUT_FILENAME 
 from email_processor import has_unprocessed_mail 
-
-
+from email_processor import remove_processed_category, PROCESSED_CATEGORY_NAME
 # ----------------------------------------------------
 # ユーティリティ関数群 (Outlook連携、DF処理)
 # ----------------------------------------------------
@@ -216,7 +218,8 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         traceback.print_exc()
         
     finally:
-        pythoncom.CoInitialize()
+        # 📌 修正1: CoInitialize() ではなく CoUninitialize() を呼び出す
+        pythoncom.CoUninitialize()
 
 def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry):
     """GUIをブロックしないよう、抽出処理を別スレッドで実行するラッパー。"""
@@ -323,12 +326,20 @@ def main():
     root = tk.Tk()
     root.title("Outlook Mail Search Tool")
     root.geometry("800x650") 
+    # ----------------------------------------------------
+    # 📌 修正1: 「×」ボタンで確実に終了する処理を追加
+    # ----------------------------------------------------
+    def on_main_window_close():
+        """メインウィンドウを閉じる際の処理（アプリケーション全体を終了）"""
+        # (将来的に確認ダイアログなどを追加可能)
+        root.destroy() # メインループを終了
 
     # --- 共有変数 ---
     read_mode_var = tk.StringVar(value="all") 
     delete_days_var = tk.StringVar(value="14") 
     extract_days_var = tk.StringVar(value="14") 
-    
+    # 📌 修正2: スレッド間通信用のキューを作成
+    gui_queue = queue.Queue()
     # 2. 初期設定データの読み込み
     saved_account, saved_folder = utils.load_config_csv() 
     if not saved_folder: saved_folder = TARGET_FOLDER_PATH 
@@ -411,7 +422,9 @@ def main():
     )
     run_button.grid(row=2, column=0, padx=5, pady=5, sticky='ew')
     
-    # 検索一覧ボタン (前回同様に無効化から開始)
+# ----------------------------------------------------
+    # 📌 修正2: 検索一覧ボタンのコールバック (Toplevel 起動)
+    # ----------------------------------------------------
     def open_search_callback():
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
         
@@ -420,15 +433,27 @@ def main():
             return
             
         try:
+            # 1. メインウィンドウを非表示にする
             root.withdraw() 
-            gui_search_window.main()
+            
+            # 2. 検索ウィンドウを Toplevel として起動 (root を親として渡す)
+            search_app = gui_search_window.App(root, file_path=output_file_abs_path)
+            
+            # 3. Toplevel が閉じられるまで待機 (ここで処理がブロックされる)
+            search_app.wait_window()
+            
         except Exception as e:
             messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
             traceback.print_exc()
         finally:
-            # 復元処理
-            root.after(0, root.deiconify)
-    
+            # 4. Toplevel が閉じたら、メインウィンドウを再表示
+            # (Toplevelが destroy された後に root が deiconify される)
+            # 📌 修正3: 二重破棄エラー回避
+            try:
+                if root.winfo_exists():
+                    root.deiconify()
+            except tk.TclError:
+                pass # アプリケーションが既に破棄されてい
     search_button = ttk.Button(
         process_frame, 
         text="検索一覧 (結果表示)", 
@@ -472,16 +497,23 @@ def main():
     }
     
     # ----------------------------------------------------
-    # 起動時の処理
+    # 📌 修正3: 起動時の検索ボタン状態設定 (ファイル存在チェック)
     # ----------------------------------------------------
     output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
     
     if os.path.exists(output_file_abs_path):
-        search_button.config(state=tk.NORMAL)
-        status_label.config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
+        main_elements['search_button'].config(state=tk.NORMAL) # 辞書経由で設定
+        main_elements['status_label'].config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
     
-    def check_unprocessed_async(account_email, folder_path, status_label):
-        
+    # ----------------------------------------------------
+    # 📌 修正4: 未処理メールの存在チェック (スレッドとGUIキュー)
+    # ----------------------------------------------------
+    
+    def check_unprocessed_async(account_email, folder_path, q):
+        """
+        [バックグラウンドスレッドで実行]
+        未処理メールをカウントし、結果をキューに入れる。
+        """
         try:
             unprocessed_count = has_unprocessed_mail(folder_path, account_email)
             
@@ -492,22 +524,36 @@ def main():
                     final_message = "状態: 抽出結果ファイルあり。未処理メールはありません。"
                 else:
                     final_message = "状態: 対象のメールはありません" 
-                
-            root.after(0, lambda: status_label.config(text=final_message))
+            
+            q.put(final_message)
 
         except Exception as e:
             error_msg = f"状態: バックグラウンドチェックエラー - {e}"
-            root.after(0, lambda: status_label.config(text=error_msg))
-            root.after(0, lambda: print(f"未処理チェックスレッドでエラーが発生: {e}"))
+            q.put(error_msg)
+            print(f"未処理チェックスレッドでエラーが発生: {e}")
             
-            if not os.path.exists(output_file_abs_path):
-                root.after(0, lambda: status_label.config(text="状態: 待機中（チェックエラー）。"))
-    
+    def check_queue():
+        """
+        [メインスレッドで実行]
+        キューをポーリングし、GUIを安全に更新する。
+        """
+        try:
+            message = gui_queue.get(block=False)
+            status_label.config(text=message)
+        except queue.Empty:
+            pass
+        finally:
+            # 100ms後に再度キューをチェックする
+            root.after(100, check_queue)
+
     # 起動時のチェックを開始
-    threading.Thread(target=lambda: check_unprocessed_async(saved_account, saved_folder, status_label)).start()
+    threading.Thread(target=lambda: check_unprocessed_async(saved_account, saved_folder, gui_queue), daemon=True).start()
+    
+    # キューの監視を開始
+    root.after(100, check_queue)
     
     # 6. アプリケーションの開始
     root.mainloop()
-
 if __name__ == "__main__":
     main()
+    

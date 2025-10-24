@@ -101,9 +101,9 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
         
         # win32com.client を使用して Outlook オブジェクトを取得 (維持)
         try:
-            outlook = win32.client.GetActiveObject("Outlook.Application")
+            outlook = win32.GetActiveObject("Outlook.Application")
         except:
-            outlook = win32.client.Dispatch("Outlook.Application")
+            outlook = win32.Dispatch("Outlook.Application")
 
         namespace = outlook.GetNamespace("MAPI")
         folder = get_outlook_folder(namespace, target_email, folder_path)
@@ -148,34 +148,53 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
     finally:
         pythoncom.CoUninitialize()
 # ----------------------------------------------------------------------
-# 💡 未処理メールの件数をカウント
+# 💡 未処理メールの件数をカウント (デバッグログ削除)
 # ----------------------------------------------------------------------
 
 def has_unprocessed_mail(folder_path: str, target_email: str) -> int:
     """
-    指定されたフォルダに、処理済みカテゴリのないメールが何件あるかカウントする。
+    指定されたフォルダに、処理済みカテゴリがなく、【かつキーワードに合致する】メールの件数をカウントする。
     """
     unprocessed_count = 0
-    if not folder_path or not target_email:
-        return 0
+    if not folder_path or not target_email: return 0
         
+    outlook = None # COMオブジェクトを初期化
+    
     try:
         pythoncom.CoInitialize() 
-        # ✅ 修正箇所: win32.Dispatch を使用
+        
         try:
             outlook = win32.GetActiveObject("Outlook.Application")
         except:
             outlook = win32.Dispatch("Outlook.Application")
+
         namespace = outlook.GetNamespace("MAPI")
         folder = get_outlook_folder(namespace, target_email, folder_path)
         
         if folder:
             items = folder.Items
+            
+            try:
+                items.Sort("[ReceivedTime]", False) 
+            except Exception:
+                pass
+            
             for item in items:
-                if item.Class == 43:
-                    current_categories = getattr(item, 'Categories', '')
-                    if PROCESSED_CATEGORY_NAME not in current_categories:
-                        unprocessed_count += 1
+                if item.Class == 43: # olMailItem
+                    
+                    subject = str(getattr(item, 'Subject', ''))
+                    body = str(getattr(item, 'Body', ''))
+                    categories = str(getattr(item, 'Categories', ''))
+                    full_search_text = subject + " " + body 
+
+                    # 1. 処理済みではないことをチェック
+                    if PROCESSED_CATEGORY_NAME not in categories:
+                        
+                        # 2. キーワードに合致するかをチェック (ノイズ除外)
+                        must_include = any(re.search(kw, full_search_text, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
+                        
+                        if must_include:
+                            unprocessed_count += 1
                         
     except Exception as e:
         print(f"警告: 未処理メールチェック中にCOMエラー発生: {e}")
@@ -184,9 +203,9 @@ def has_unprocessed_mail(folder_path: str, target_email: str) -> int:
     finally:
         pythoncom.CoUninitialize()
         
+    # 📌 修正: デバッグログの出力を削除
+    
     return unprocessed_count
-
-
 # ----------------------------------------------------------------------
 # 💡 メイン抽出関数: Outlookからメールを取得
 # ----------------------------------------------------------------------
@@ -261,7 +280,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                     attachment_names = []
                     
                     # ----------------------------------------------------
-                    # 📌 修正2: 添付ファイルの読み込みロジック (ファイルI/Oのスキップと復元)
+                    # 📌 修正1: 添付ファイル処理を try/except で完全にラップ
                     # ----------------------------------------------------
                     has_files = hasattr(mail_item, 'Attachments') and mail_item.Attachments.Count > 0
                     
@@ -269,7 +288,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         attachment_names = [att.FileName for att in mail_item.Attachments]
                         
                         if is_processed and mail_entry_id in previous_attachment_content:
-                            # 処理済みの場合、ファイルI/Oをスキップして本文を復元
                             attachments_text = str(previous_attachment_content.get(mail_entry_id, "")) 
                             
                         else:
@@ -279,29 +297,44 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                                 safe_filename = re.sub(r'[\\/:*?"<>|]', '_', attachment.FileName)
                                 temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}_{safe_filename}")
                                 
+                                # 📌 修正2: 個別添付ファイルの処理を try/except で保護
                                 try:
                                     attachment.SaveAsFile(temp_file_path)
                                     extracted_content = get_attachment_text(temp_file_path, attachment.FileName)
                                     attachments_text += f"\n--- FILE: {attachment.FileName} ---\n{str(extracted_content)}\n"
                                 except Exception as file_ex:
+                                    # 抽出失敗ログを本文に残す
                                     attachments_text += f"\n--- ERROR reading {attachment.FileName}: {file_ex} ---\n"
                                 finally:
+                                    # 一時ファイルを確実に削除
                                     if os.path.exists(temp_file_path):
                                         os.remove(temp_file_path)
                             
                             attachments_text = attachments_text.strip()
                     
-                    # 文字列結合時にも str() を適用し、結合エラーを排除
                     full_search_text = str(subject) + " " + str(body) + " " + str(attachments_text)
                     
                     # キーワードフィルタリング (MUST/EXCLUDE)
                     must_include = any(re.search(kw, full_search_text, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
                     is_excluded = any(re.search(kw, full_search_text, re.IGNORECASE) for kw in EXCLUDE_KEYWORDS)
                     
-                    if is_excluded or not must_include: 
-                        continue 
+                    
+                    # 抽出対象として残す条件を調整 (キーワードチェック)
+                    if is_processed and not must_include:
+                         continue
 
-                    # レコードの準備
+                    # 📌 修正1: 除外キーワードに合致した場合の処理を変更
+                    if is_excluded:
+                         if not is_processed:
+                             # 未処理の除外対象メールであれば、マークを付けてスキップ
+                             mark_email_as_processed(mail_item)
+                         continue
+                        
+                    if not must_include and not is_processed:
+                         # 未処理だが、キーワードに該当しないメールは抽出せず、マークだけ付けてスキップ
+                         mark_email_as_processed(mail_item)
+                         continue  
+                    # レコードの準備 (抽出結果を DataFrame に追加)
                     record = {
                         'EntryID': mail_entry_id,
                         '件名': subject,
@@ -315,20 +348,23 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                     # 抽出が成功し、かつ未処理の場合のみ、メールを「処理済み」としてマーク
                     if not is_processed:
                         mark_email_as_processed(mail_item) 
-
+                        
                 except Exception as item_ex:
+                    # 📌 修正3: エラー発生時でも、未処理メールならマークを付ける（固定化回避）
                     print(f"警告: メールアイテムの処理中にエラーが発生しました (EntryID: {mail_entry_id}). スキップします。エラー: {item_ex}")
-                    continue 
+                    if not is_processed:
+                         # 抽出に失敗したが、次回以降カウントされないようマークを付ける
+                         mark_email_as_processed(mail_item) 
+                    continue # 次のアイテムへ
 
     except Exception as e:
-        # メイン処理（フォルダ取得など）でエラーが発生した場合は、再スロー
         raise RuntimeError(f"Outlook操作エラー: {e}\n詳細: {traceback.format_exc()}")
     finally:
         # 一時ディレクトリのクリーンアップ
         if os.path.exists(temp_dir) and not os.listdir(temp_dir):
             try: os.rmdir(temp_dir)
             except OSError: pass
-        pythoncom.CoUninitialize() 
+        pythoncom.CoUninitialize()
             
     df = pd.DataFrame(data_records)
     str_cols = [col for col in df.columns if col != '受信日時']
