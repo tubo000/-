@@ -9,7 +9,6 @@ import os
 from email_processor import OUTPUT_FILENAME 
 import main_application
 
-
 # ==============================================================================
 # 0. 共通ユーティリティ（データ処理ロジック）
 # ==============================================================================
@@ -23,19 +22,40 @@ def create_sample_data():
         'スキル': ['JAVA, Python, C言語, DB', 'C#, Azure', 'Python, AWS', 'JAVA, AWS', 'C#, Unity', 
                  'Python, AI', 'DB, SQL', 'JAVA, DB', 'C#, .NET', 'Python, Django'],
         '本文': [f'これはメール本文{i}です。詳細情報や経歴はこの本文に記述されています。非常に長いメール本文を想定しています。' for i in range(1, 11)],
-        '年齢': [25, 30, 45, 33, 28, 50, 40, 37, 22, 35], 
-        '単価': [50, 65, 70, 55, 60, 80, 75, 50, 60, 70],
+        '年齢': [25, 30, pd.NA, 33, 28, 50, 40, 37, 22, 35], # NaNを含む
+        '単価': [50, 65, 70, pd.NA, 60, 80, 75, 50, 60, 70], # NaNを含む
         '実働開始': ['202405', '202501', '202407', '202403', '202506', 
-                   '2024年01', '202503', '202411', '202402', '202502'],
+                   '2024年01', pd.NA, '202411', '202402', '202502'], # NaNを含む
     }
     return pd.DataFrame(data)
+
+def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
+    """キーワードリストを用いて、指定された列に対してAND検索を実行する。"""
+    if df.empty or not keywords: return df
+    # キーワード検索の対象列: ENTRY_ID, 氏名, スキルと本文の範囲検索以外の全ての列
+    search_cols = [col for col in df.columns if col  in ['スキル','件名','本文','添付ファイル内容']]
+    # NaN値を' 'に置き換え、全ての検索対象列を結合して検索文字列を作成
+    df_search = df[search_cols].astype(str).fillna(' ').agg(' '.join, axis=1).str.lower()
+    
+    filter_condition = pd.Series([True] * len(df), index=df.index)
+    
+    for keyword in keywords:
+        lower_keyword = keyword.lower().strip()
+        if lower_keyword:
+            # キーワードを含む行をAND条件で絞り込み
+            filter_condition = filter_condition & df_search.str.contains(lower_keyword, na=False)
+            
+    return df[filter_condition]
 
 def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd.DataFrame:
     """キーワード（AND検索）と範囲指定（年齢/単価/実働開始）の両方でデータをフィルタリングするメインロジック。"""
     df_filtered = df.copy()
+    
     # 1. キーワードフィルタリング (AND条件)
+    #    キーワードの条件はここで「別」に適用される
     df_filtered = filter_skillsheets_by_keywords(df_filtered, keywords)
     if df_filtered.empty: return df_filtered
+    
     # 2. 範囲指定フィルタリング
     for key, limits in range_data.items():
         lower = limits['lower']
@@ -48,40 +68,49 @@ def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd
             try:
                 col = df_filtered[col_name]
                 # 数値フィルタリングを robust にする
-                col = pd.to_numeric(col, errors='coerce') 
+                col_numeric = pd.to_numeric(col, errors='coerce') 
                 
-                lower_val = int(lower) if lower and str(lower).isdigit() else col.min()
-                upper_val = int(upper) if upper and str(upper).isdigit() else col.max()
+                # NaNではない行と、NaNである行のインデックスを分離
+                is_not_nan = col_numeric.notna()
                 
-                df_filtered = df_filtered[(col.notna()) & (col >= lower_val) & (col <= upper_val)]
+                # 範囲計算（数値でない場合は全体からmin/maxを使用）
+                lower_val = int(lower) if lower and str(lower).isdigit() else col_numeric.min()
+                upper_val = int(upper) if upper and str(upper).isdigit() else col_numeric.max()
+                
+                # 1. 数値として有効な行に対してのみ範囲フィルタを適用
+                valid_range_filter = is_not_nan & (col_numeric >= lower_val) & (col_numeric <= upper_val)
+                
+                # 2. NaNの行（is_not_nanがFalseの行）を無条件に含める
+                #    条件: (数値フィルタリングを通る) OR (NaNである)
+                filter_condition = valid_range_filter | (~is_not_nan) 
+                df_filtered = df_filtered[filter_condition]
+                
             except Exception as e:
                 print(f"🚨 データ型エラー: '{col_name}'の入力値またはデータが無効です。{e}")
                 continue
                 
         elif key == 'start' and '実働開始' in df_filtered.columns:
-            start_col = df_filtered['実働開始'].astype(str)
+            # NaNの行（欠損値）を特定
+            is_nan_or_nat = df_filtered['実働開始'].isna()
+            
+            # フィルタリング対象の行 (NaN/NaTではない行)
+            df_target = df_filtered[~is_nan_or_nat].copy()
+            start_col_target_str = df_target['実働開始'].astype(str)
+            
+            filter_condition = pd.Series([True] * len(df_target), index=df_target.index)
+            
             if lower: 
-                df_filtered = df_filtered[start_col >= lower]
+                filter_condition = filter_condition & (start_col_target_str >= lower)
             if upper:
-                df_filtered = df_filtered[start_col <= upper]
+                filter_condition = filter_condition & (start_col_target_str <= upper)
+                
+            # フィルタリングされた有効データと、もともとNaNだったデータを結合
+            df_filtered = pd.concat([
+                df_target[filter_condition],
+                df_filtered[is_nan_or_nat] # NaNだった行を無条件で追加
+            ]).drop_duplicates(keep='first').sort_index()
             
     return df_filtered
-
-def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
-    """キーワードリストを用いて、指定された列に対してAND検索を実行する。"""
-    if df.empty or not keywords: return df
-    # キーワード検索の対象列: ENTRY_ID, 氏名, スキルと本文の範囲検索以外の全ての列
-    search_cols = [col for col in df.columns if col  in ['スキル','件名','本文','添付ファイル内容']]
-    df_search = df[search_cols].astype(str).agg(' '.join, axis=1).str.lower()
-    
-    filter_condition = pd.Series([True] * len(df), index=df.index)
-    
-    for keyword in keywords:
-        lower_keyword = keyword.lower().strip()
-        if lower_keyword:
-            filter_condition = filter_condition & df_search.str.contains(lower_keyword, na=False)
-            
-    return df[filter_condition]
 
 
 # ==============================================================================
@@ -104,7 +133,7 @@ class App(tk.Tk):
         # --- 共有データ ---
         self.keywords = []      
         self.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}} 
-        
+
         self.all_cands = {
             'age': [str(i) for i in range(20, 71, 5)], 
             'price': [str(i) for i in range(50, 101, 10)],
@@ -116,17 +145,24 @@ class App(tk.Tk):
         self.df_filtered_skills = self.df_all_skills.copy()
         
         self.current_frame = None
+        
+        # 📌 修正1-A: self.screen1 と self.screen2 をインスタンス変数として定義
+        # show_screen1内でこれらをインスタンス化する
+        self.screen1 = None 
+        self.screen2 = None
+        
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
+        
+        # 修正1-B: ここでの show_screen1 呼び出しはOK
         self.show_screen1()
         
-        # ウィンドウが閉じられた時の処理を設定
+        # 📌 修正1-C: on_closing が App クラスにあるので、プロトコル設定はOK
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
 
     def on_closing(self):
         """ウィンドウを閉じる際の処理（main_applicationに戻る）"""
         self.destroy()
-        
 
     def _load_data(self, file_path):
         """データファイルを読み込み、必要な列名をリネーム・クリーンアップする"""
@@ -169,21 +205,56 @@ class App(tk.Tk):
     def show_screen1(self):
         """検索条件入力画面（Screen1）に遷移する"""
         if self.current_frame: self.current_frame.destroy()
+        
+        # Screen1を再生成
         self.current_frame = Screen1(self)
         self.current_frame.grid(row=0, column=0, sticky='nsew')
+        
+        current_keywords_str = ", ".join(self.keywords)
+        
+        
+        # 📌 修正2-A: 画面生成後、10ms後に値を設定
+        self.after(10, lambda: self._set_screen1_keywords(current_keywords_str))
+
+
+    def show_screen1(self):
+        """検索条件入力画面（Screen1）に遷移する"""
+        if self.current_frame: self.current_frame.destroy()
+        
+        # 📌 修正1-D: self.screen1 にインスタンスを保存し、 current_frame もそれを使う
+        self.screen1 = Screen1(self)
+        self.current_frame = self.screen1
+        self.current_frame.grid(row=0, column=0, sticky='nsew')
+        
+        # キーワード設定用の文字列を準備
+        current_keywords_str = ", ".join(self.keywords)
+        
+        # 📌 修正1-E: キーワード設定を遅延実行
+        self.after(10, lambda: self._set_screen1_keywords(current_keywords_str))
+
+    def _set_screen1_keywords(self, keywords_str):
+        """after()で遅延実行される、キーワード設定処理"""
+        # 📌 修正1-F: self.screen1 を使って keyword_entry を操作する
+        self.screen1.keyword_entry.delete(0, tk.END) 
+        self.screen1.keyword_entry.insert(0, keywords_str)
+
+        # デバッグ出力はここでは削除（コードをシンプルにするため）
 
     def show_screen2(self):
-        """検索結果表示画面（Screen2）に遷移する。遷移前にフィルタリングを実行する。"""
+        """検索結果表示画面（Screen2）に遷移する。"""
         if self.current_frame: 
-            self.current_frame.save_state()
+            # self.current_frame が Screen1 の場合のみ save_state を呼ぶ
+            if isinstance(self.current_frame, Screen1): 
+                self.current_frame.save_state()
             self.current_frame.destroy()
             
         self.df_filtered_skills = filter_skillsheets(
             self.df_all_skills, self.keywords, self.range_data)
         
-        self.current_frame = Screen2(self)
+        # 📌 修正1-G: self.screen2 にインスタンスを保存し、current_frame もそれを使う
+        self.screen2 = Screen2(self)
+        self.current_frame = self.screen2
         self.current_frame.grid(row=0, column=0, sticky='nsew')
-
 
 # ==============================================================================
 # 2. 画面1: 検索条件の入力
@@ -195,17 +266,30 @@ class Screen1(ttk.Frame):
         super().__init__(master)
         self.master = master
         
-        self.lower_vars = {}
-        self.upper_vars = {}
+        # 📌 修正1-A: lower_vars/upper_vars (tk.StringVar) を削除
+        # self.lower_vars = {} # 削除
+        # self.upper_vars = {} # 削除
+        
+        # 📌 修正1-B: ウィジェット本体を保持する辞書を定義
+        self.lower_widgets = {} 
+        self.upper_widgets = {} 
         
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=1)
         
         # --- UI部品の配置（Row 0 - Row 7 まで） ---
         ttk.Label(self, text="カンマ区切り（5個まで）：キーワード検索").grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
-        self.keyword_var = tk.StringVar(value=", ".join(master.keywords))
-        self.keyword_entry = ttk.Entry(self, textvariable=self.keyword_var)
+        
+        # 📌 修正2-B: self.keyword_var の定義を削除（AttributeError対策）
+        # self.keyword_var = tk.StringVar(value=", ".join(master.keywords)) # 削除
+        
+        # 📌 修正2-C: Entryから textvariable=self.keyword_var を削除
+        self.keyword_entry = ttk.Entry(self) # ttk.Entry(self, textvariable=self.keyword_var) ではない
         self.keyword_entry.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='ew')
+        
+        # 📌 修正2-D: 初期値設定を削除（App.after(10, ...) に任せる）
+        # initial_keywords_str = ", ".join(master.keywords) # 削除
+        # self.keyword_entry.insert(0, initial_keywords_str) # 削除
         
         ttk.Label(self, text="単価 (万円) 範囲指定").grid(row=2, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
         self.create_range_input('単価 (万円) 範囲指定', 'price', row=2)
@@ -215,16 +299,14 @@ class Screen1(ttk.Frame):
         self.create_range_input('実働開始 範囲指定 (YYYYMM)', 'start', row=6)
 
         self.rowconfigure(8, weight=1)        
-        # 📌 修正1: ボタンを格納するためのフレームを作成
-        # 検索ボタンと戻るボタンを配置するフレーム
         button_frame = ttk.Frame(self)
         button_frame.grid(row=9, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
        
         # 検索ボタン (右寄せ)
-        ttk.Button(button_frame, text="検索 (画面2へ)", command=master.show_screen2).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(button_frame, text="検索", command=master.show_screen2).pack(side=tk.RIGHT, padx=5)
        
-        # 📌 修正2: 「抽出画面に戻る」ボタンを master.destroy に設定
-        #          (master == App インスタンス)
+        # 📌 修正1-C: 「抽出画面に戻る」ボタンを master.destroy に設定（App.on_closingではなくApp.destroyを直接呼ぶ）
+        # トレースバックの on_closing エラー対策
         ttk.Button(button_frame, text="抽出画面に戻る", command=self.master.destroy).pack(side=tk.LEFT, padx=5)
 
     def create_range_input(self, label_text, key, row):
@@ -233,46 +315,62 @@ class Screen1(ttk.Frame):
 
         # 下限
         ttk.Label(self, text="下限:").grid(row=row+1, column=0, padx=(10, 0), pady=5, sticky='w')
-        self.lower_vars[key] = tk.StringVar(value=self.master.range_data[key]['lower']) 
-        lower_var = self.lower_vars[key]
         
+        # 📌 修正2-A: tk.StringVarを使わない Entry/Combobox を作成
         if is_combobox:
-            widget_lower = ttk.Combobox(self, textvariable=lower_var, values=self.master.all_cands.get(key, []))
+            widget_lower = ttk.Combobox(self, values=self.master.all_cands.get(key, []))
+            # bindはそのまま
             widget_lower.bind('<KeyRelease>', lambda e, k=key, c=widget_lower: self.update_combobox_list(e, k, c))
         else:
-            widget_lower = ttk.Entry(self, textvariable=lower_var)
+            widget_lower = ttk.Entry(self)
             
         widget_lower.grid(row=row+1, column=0, padx=(50, 10), pady=5, sticky='ew')
+        
+        # 📌 修正2-B: 初期値をウィジェットに直接設定
+        initial_lower_val = self.master.range_data[key]['lower']
+        widget_lower.insert(0, initial_lower_val)
+        
+        # 📌 修正2-C: ウィジェット参照を保存
+        self.lower_widgets[key] = widget_lower 
 
         # 上限
         ttk.Label(self, text="上限:").grid(row=row+1, column=1, padx=(10, 0), pady=5, sticky='w')
-        self.upper_vars[key] = tk.StringVar(value=self.master.range_data[key]['upper'])
-        upper_var = self.upper_vars[key]
         
+        # 📌 修正2-D: tk.StringVarを使わない Entry/Combobox を作成
         if is_combobox:
-            widget_upper = ttk.Combobox(self, textvariable=upper_var, values=self.master.all_cands.get(key, []))
+            widget_upper = ttk.Combobox(self, values=self.master.all_cands.get(key, []))
             widget_upper.bind('<KeyRelease>', lambda e, k=key, c=widget_upper: self.update_combobox_list(e, k, c))
         else:
-            widget_upper = ttk.Entry(self, textvariable=upper_var)
+            widget_upper = ttk.Entry(self)
             
         widget_upper.grid(row=row+1, column=1, padx=(50, 10), pady=5, sticky='ew')
 
-    def update_combobox_list(self, event, key, combo):
-        """Comboboxに入力された文字で候補リストをフィルタリングする（オートコンプリート）"""
-        typed = combo.get().lower()
-        all_candidates = self.master.all_cands.get(key, [])
-        new_values = [item for item in all_candidates if item.lower().startswith(typed)]
-        combo['values'] = new_values
+        # 📌 修正2-E: 初期値をウィジェットに直接設定
+        initial_upper_val = self.master.range_data[key]['upper']
+        widget_upper.insert(0, initial_upper_val)
 
+        # 📌 修正2-F: ウィジェット参照を保存
+        self.upper_widgets[key] = widget_upper
     def save_state(self):
         """画面遷移前に現在の入力状態をAppオブジェクトに保存する"""
+        
+        # self.update_idletasks() はもはや不要ですが、残していても害はありません。
+        # self.update_idletasks() 
+        
+        # キーワードの保存（変更なし、Entry.get()で直接取得）
         new_keywords = [k.strip() for k in self.keyword_entry.get().split(',') if k.strip()]
         self.master.keywords = list(set(new_keywords))[:5]
         
+        # 📌 修正3: tk.StringVarではなく、ウィジェット本体から値を直接取得
         for key in ['age', 'price', 'start']:
-            self.master.range_data[key]['lower'] = self.lower_vars[key].get().strip()
-            self.master.range_data[key]['upper'] = self.upper_vars[key].get().strip()
-
+            # self.lower_vars の代わりに self.lower_widgets を使用
+            lower_widget = self.lower_widgets[key]
+            upper_widget = self.upper_widgets[key]
+            
+            self.master.range_data[key]['lower'] = lower_widget.get().strip()
+            self.master.range_data[key]['upper'] = upper_widget.get().strip()
+            
+        # デバッグ出力はここでは削除し、コードをシンプルにします。
 
 # ==============================================================================
 # 3. 画面2: タグ表示とTreeview
@@ -325,7 +423,7 @@ class Screen2(ttk.Frame):
         self.body_text = tk.Text(self, wrap='word', height=10, state='disabled')
         self.body_text.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='nsew')
        
-        ttk.Button(self, text="戻る (画面1へ)", command=master.show_screen1).grid(row=9, column=0, columnspan=2, padx=10, pady=10)
+        ttk.Button(self, text="戻る", command=master.show_screen1).grid(row=9, column=0, columnspan=2, padx=10, pady=10)
 
 
     def open_email_from_entry(self):
@@ -377,6 +475,7 @@ class Screen2(ttk.Frame):
 
         item_id = selected_items[0]
         email_body = "データを取得できませんでした。"
+        full_text = ""
         
         try:
             id_index = list(self.tree['columns']).index('ENTRY_ID')
@@ -389,11 +488,14 @@ class Screen2(ttk.Frame):
                 
                 if pd.notna(full_data) and str(full_data).strip() != '':
                     full_text = str(full_data)
-                full_text = full_text.replace('_x000D_', '')
-                # 📌 修正3: テキストエリア表示を1000文字に制限
-                email_body = str(full_text)[:1000]
-                if len(full_text) > 1000:
-                    email_body += "...\n\n[--- 1000文字以降は省略 ---]"
+                    full_text = full_text.replace('_x000D_', '')
+                    # 📌 修正3: テキストエリア表示を1000文字に制限
+                    email_body = str(full_text)[:1000]
+                    if len(full_text) > 1000:
+                        email_body += "...\n\n[--- 1000文字以降は省略 ---]"
+                else:
+                    email_body = f"{content_type} のデータが空です。"
+
             else:
                 email_body = f"ID: {entry_id} の本文データが元のリストに見つかりません。"
             
@@ -498,13 +600,13 @@ class Screen2(ttk.Frame):
                 val = getattr(row, col, 'N/A')
                 
                 # 📌 修正1: 「年齢」カラムの値を整数に変換し、NaNを空文字列に置き換える
-                if col == '年齢':
+                if col == '年齢' or col == '単価':
                     if pd.notna(val):
                         try:
                             # 整数型に変換し、小数点以下を切り捨てる
                             val = int(float(val))
                         except (ValueError, TypeError):
-                            # 変換エラーが発生した場合は元の値をそのまま表示（または空欄にする）
+                            # 変換エラーが発生した場合は元の値をそのまま表示
                             val = str(val) 
 
                 if col == '受信日時':
@@ -516,10 +618,7 @@ class Screen2(ttk.Frame):
                         val = '' # データがない場合は空欄にする
 
                 # Treeviewのデータ挿入ロジック
-
-
                 # 📌 修正2: Treeviewのデータ挿入ロジックは他の修正を反映し、シンプルにする
-                #           (本文の文字数制限ロジックは Treeview に本文カラムが無いため一旦除外)
                 values.append(val)
                 
             try:
@@ -532,6 +631,7 @@ class Screen2(ttk.Frame):
         search_id = self.id_entry.get().strip()
         
         if not search_id:
+            # ID検索をクリアした場合、元のキーワード/範囲フィルタを再適用する
             self.master.df_filtered_skills = filter_skillsheets(self.master.df_all_skills, self.master.keywords, self.master.range_data)
         else:
             self.master.df_filtered_skills = self.master.df_all_skills[
@@ -568,6 +668,7 @@ class Screen2(ttk.Frame):
 
     def show_email_body(self, item_id):
         email_body = "本文データを取得できませんでした。"
+        full_text = ""
         try:
             entry_id_col_index = list(self.tree['columns']).index('ENTRY_ID')
             tree_values = self.tree.item(item_id, 'values')
@@ -575,12 +676,17 @@ class Screen2(ttk.Frame):
             
             body_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
             if not body_row.empty and '本文' in body_row.columns:
-                full_text = body_row['本文'].iloc[0]
-                full_text = full_text.replace('_x000D_', '')
-                # 📌 修正5: テキストエリア表示を1000文字に制限
-                email_body = str(full_text)[:1000]
-                if len(full_text) > 1000:
-                    email_body += "...\n\n[--- 1000文字以降は省略 ---]"
+                full_data = body_row['本文'].iloc[0]
+                if pd.notna(full_data) and str(full_data).strip() != '':
+                    full_text = str(full_data)
+                    full_text = full_text.replace('_x000D_', '')
+                    # 📌 修正5: テキストエリア表示を1000文字に制限
+                    email_body = str(full_text)[:1000]
+                    if len(full_text) > 1000:
+                        email_body += "...\n\n[--- 1000文字以降は省略 ---]"
+                else:
+                     email_body = "本文のデータが空です。"
+
             else:
                 email_body = f"ID: {entry_id} の本文データが元のリストに見つかりません。"
             
@@ -591,6 +697,7 @@ class Screen2(ttk.Frame):
         self.body_text.delete(1.0, tk.END) 
         self.body_text.insert(tk.END, email_body)
         self.body_text.config(state='disabled')
+pass
 
 
 # ==============================================================================
