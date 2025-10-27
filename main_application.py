@@ -108,11 +108,12 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
             days_ago=days_ago 
         )
         
-        # 🚨 修正: 処理対象が0件の場合
         if df_mail_data.empty:
             status_label.config(text="状態: 処理対象のメールがありませんでした。")
             messagebox.showinfo("完了", "処理対象のメールがありませんでした。")
             return
+
+        # main_application.py の actual_run_extraction_logic 関数内 (修正箇所)
 
         status_label.config(text="状態: 抽出コアロジック実行中...")
         df_extracted = extract_skills_data(df_mail_data)
@@ -122,21 +123,27 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         df_output = df_extracted.copy()
         date_key_df = df_mail_data[['EntryID', '受信日時']].copy()
         
-        # 受信日時カラムをマージするために古いカラムをドロップし、新しいカラムをマージ
         if DATE_COLUMN in df_output.columns:
             df_output.drop(columns=[DATE_COLUMN], inplace=True, errors='ignore')
             
         df_output = pd.merge(df_output, date_key_df, on='EntryID', how='left')
 
-        # EntryIDをURLに変換
-        if 'EntryID' in df_output.columns and 'メールURL' not in df_output.columns:
-             # EntryID の値を一時的なカラム 'EntryID_temp' にコピー
-             df_output.insert(df_output.columns.get_loc('EntryID') + 1, 'EntryID_temp', df_output['EntryID'])
-             df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
+        # ----------------------------------------------------
+        # 📌 修正1: EntryID を追記処理で使うため、ここで一時列を作成
+        # ----------------------------------------------------
+        if 'EntryID' in df_output.columns:
+             # メールURL の生成
+             if 'メールURL' not in df_output.columns:
+                 df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
+             
+             # 比較用の EntryID_temp を作成
+             df_output['EntryID_temp'] = df_output['EntryID'].str.replace('outlook:', '', regex=False).str.strip()
 
         # 列順の整理
         df_output = reorder_output_dataframe(df_output)
-        final_drop_list = ['EntryID', '宛先メール', '本文(抽出元結合)'] 
+        
+        # 📌 修正2: EntryID を final_drop_list から削除 (まだ保持する)
+        final_drop_list = ['宛先メール', '本文(抽出元結合)'] 
         final_drop_list = [col for col in df_output.columns if col in final_drop_list]
         df_output = df_output.drop(columns=final_drop_list, errors='ignore')
         
@@ -151,52 +158,48 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
         df_final = df_output.copy() 
 
+        # 📌 修正3: df_output の EntryID_temp をリストとして取得
+        current_entry_ids = []
+        if 'EntryID_temp' in df_final.columns:
+            current_entry_ids = df_final['EntryID_temp'].tolist()
+
         if os.path.exists(output_file_abs_path):
             try:
-                # 既存データを読み込む (dtype=str で安全に読み込む)
                 df_existing = pd.read_excel(output_file_abs_path, dtype=str)
                 
                 if 'メールURL' in df_existing.columns:
-                    # 既存データから EntryID をクリーンアップし、比較用の列を作成
+                    
                     df_existing['TempEntryID'] = df_existing['メールURL'].str.replace('outlook:', '', regex=False).str.strip()
                     
-                    # 今回抽出された EntryID リストを安全に取得
-                    current_entry_ids = df_output['EntryID_temp'].str.replace('outlook:', '', regex=False).tolist()
-
-                    # 重複しない既存のレコードのみを保持
+                    # 📌 修正4: current_entry_ids を使って重複排除
                     df_existing_unique = df_existing[~df_existing['TempEntryID'].isin(current_entry_ids)].copy()
-                    
-                    # 結合のために不要な列を削除
                     df_existing_unique.drop(columns=['TempEntryID'], errors='ignore', inplace=True)
                     
-                    # 既存データの受信日時を datetime に変換し直す
                     if DATE_COLUMN in df_existing_unique.columns:
                          df_existing_unique[DATE_COLUMN] = pd.to_datetime(df_existing_unique[DATE_COLUMN], errors='coerce')
 
-                    # 新しいデータ (df_final) を最上部にして連結
                     df_final = pd.concat([df_final, df_existing_unique], ignore_index=True)
                 else:
-                    # メールURLがない場合、単純に追記（重複チェックなし）
                     df_final = pd.concat([df_final, df_existing], ignore_index=True)
                     
             except Exception as e:
                 print(f"❌ 既存Excelファイル読み込み/追記中にエラー発生。新しいデータのみ保存: {e}")
-                df_final = df_output # 失敗した場合、新しいデータのみを保存
+                df_final = df_output
         
         # ----------------------------------------------------
         # 最終調整と書き出し
         # ----------------------------------------------------
         
-        # 1. 受信日時をDateTime型に変換し、降順でソート（最新が一番上）
+        # 日時でソート
         if DATE_COLUMN in df_final.columns:
             df_final[DATE_COLUMN] = pd.to_datetime(df_final[DATE_COLUMN], errors='coerce')
             df_final = df_final.sort_values(by=DATE_COLUMN, ascending=False).reset_index(drop=True)
         
-        # 2. 最後にEntryIDカラムを完全に削除してからExcelに書き出し
-        final_drop_list_after_merge = ['EntryID', 'EntryID_temp'] # EntryID_temp も忘れずに削除
+        # 📌 修正5: 最後に EntryID と EntryID_temp を削除
+        final_drop_list_after_merge = ['EntryID', 'EntryID_temp'] 
         df_final = df_final.drop(columns=final_drop_list_after_merge, errors='ignore')
         
-        # 3. Excel書き出し用に日時型を文字列形式に戻す (Excelでの表示安定化)
+        # 日時を書式設定
         if DATE_COLUMN in df_final.columns and df_final[DATE_COLUMN].dtype != object:
             df_final[DATE_COLUMN] = df_final[DATE_COLUMN].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
         
@@ -207,7 +210,6 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{OUTPUT_FILENAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
         status_label.config(text=f"状態: 処理完了。ファイル出力済み。")
         
-        # 検索ボタンを有効化
         search_button = main_elements.get("search_button")
         if search_button:
             search_button.config(state=tk.NORMAL)
@@ -218,7 +220,6 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         traceback.print_exc()
         
     finally:
-        # 📌 修正1: CoInitialize() ではなく CoUninitialize() を呼び出す
         pythoncom.CoUninitialize()
 
 def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry):
@@ -241,15 +242,30 @@ def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry
 # ファイル内のレコード削除ロジック
 # ----------------------------------------------------
 
+# main_application.py の run_deletion_thread 関数
+
 def run_deletion_thread(root, main_elements):
     """GUIをブロックしないよう、ファイルレコード削除を別スレッドで実行するラッパー。"""
-    days_entry = main_elements["delete_days_entry"] 
-    status_label = main_elements["status_label"]
+    
+    # 📌 修正: lambda が渡す引数を main_elements に変更
+    #          (days_entry と status_label は actual_run_file_deletion_logic 側で
+    #           main_elements から取得するため、ここで渡す必要はありません)
 
-    thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(days_entry, status_label))
+    # ❌ 修正前 (2つの引数を渡している)
+    # days_entry = main_elements["delete_days_entry"] 
+    # status_label = main_elements["status_label"]
+    # thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(days_entry, status_label))
+
+    # ✅ 修正後 (main_elements という1つの引数を渡す)
+    thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(main_elements))
     thread.start()
 
-def actual_run_file_deletion_logic(days_entry, status_label):
+def actual_run_file_deletion_logic(main_elements):
+    
+    # 📌 修正: main_elements から必要なウィジェットを取得
+    days_entry = main_elements["delete_days_entry"] 
+    status_label = main_elements["status_label"]
+    reset_category_var = main_elements["reset_category_var"]
     
     days_input = days_entry.get().strip()
     output_file_path = os.path.abspath(OUTPUT_FILENAME)
@@ -269,23 +285,31 @@ def actual_run_file_deletion_logic(days_entry, status_label):
         status_label.config(text="状態: ファイルなし。")
         return
 
-    confirm = messagebox.askyesno(
-        "確認", 
-        f"🚨 警告: ファイル '{OUTPUT_FILENAME}' 内の '{DATE_COLUMN}' が {days_ago}日より古いレコードを削除し、上書き保存します。\n\n本当に実行しますか？"
-    )
+    # カテゴリリセットオプションの取得
+    reset_category_flag = reset_category_var.get()
+
+    confirm_prompt = f"🚨 警告: ファイル '{OUTPUT_FILENAME}' 内の '{DATE_COLUMN}' が {days_ago}日より古いレコードを削除します。\n"
+    if reset_category_flag:
+        confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークも解除します。\n\n本当に実行しますか？"
+    else:
+        confirm_prompt += "\n本当に実行しますか？"
+
+    confirm = messagebox.askyesno("確認", confirm_prompt)
     if not confirm:
         status_label.config(text="状態: 削除処理キャンセル。")
         return
 
     status_label.config(text=f"状態: {days_ago}日より古いレコードを削除中...")
     
+    deleted_count = 0
+    reset_count = 0
+    
     try:
-        # 1. ファイルを読み込み (Excel出力のため read_excel を使用)
+        # 1. ファイルを読み込み
         df = pd.read_excel(output_file_path)
         
-        # 📌 修正1: '受信日時' カラムの存在チェック
         if DATE_COLUMN not in df.columns:
-            raise KeyError(f"削除基準となる '{DATE_COLUMN}' カラムがファイルに見つかりません。抽出実行後、ファイルに日付カラムがあるか確認してください。")
+            raise KeyError(f"削除基準となる '{DATE_COLUMN}' カラムがファイルに見つかりません。")
 
         # 2. 削除基準を計算
         cutoff_date = datetime.datetime.now() - datetime.timedelta(days=days_ago)
@@ -293,31 +317,41 @@ def actual_run_file_deletion_logic(days_entry, status_label):
         # 3. フィルタリングと削除
         initial_count = len(df)
         
-        # '受信日時' カラムを datetime 型に変換 (エラーは NaT に)
         df['受信日時_dt'] = pd.to_datetime(df[DATE_COLUMN], errors='coerce') 
         
-        # 日付変換に成功し、かつカットオフ日より【新しい】レコードを保持
         df_kept = df[df['受信日時_dt'].notna() & (df['受信日時_dt'] >= cutoff_date)].copy()
         
         deleted_count = initial_count - len(df_kept)
         
         # 4. ファイルを上書き保存
-        df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True) # テンポラリカラムを削除
-        
-        # 📌 修正2: Excel書き出し時に日付の書式を Pandas に任せる（dtype=datetime）
-        #   Pandasは日付型のSeriesをExcelに書き出す際、適切な形式を自動的に適用します。
+        df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True) 
         df_kept.to_excel(output_file_path, index=False)
         
-        messagebox.showinfo("削除完了", f"ファイルから {days_ago}日より古いレコード {deleted_count} 件を削除しました。\n残レコード数: {len(df_kept)} 件")
+        # 5. カテゴリマークのリセット
+        if reset_category_flag:
+            reset_count = remove_processed_category(
+                main_elements["account_entry"].get().strip(), 
+                main_elements["folder_entry"].get().strip(), 
+                days_ago=days_ago
+            ) 
+        
+        msg = f"レコード削除: {deleted_count} 件完了。"
+        if reset_category_flag:
+            msg += f" (カテゴリリセット: {reset_count} 件完了)"
+            
+        messagebox.showinfo("処理完了", msg)
         status_label.config(text="状態: 削除処理完了。")
         
     except Exception as e:
         messagebox.showerror("削除エラー", f"ファイルレコード削除中にエラーが発生しました。\n詳細: {e}")
         status_label.config(text="状態: 削除エラー。")
-
 # ----------------------------------------------------
 # メイン実行関数 (GUI起動)
 # ----------------------------------------------------
+
+# main_application.py の main() 関数
+
+# main_application.py の main() 関数
 
 def main():
     """
@@ -325,21 +359,33 @@ def main():
     """
     root = tk.Tk()
     root.title("Outlook Mail Search Tool")
-    root.geometry("800x650") 
+# ----------------------------------------------------
+    # 📌 修正1: ウィンドウを画面中央に配置するロジックを追加
+    # ----------------------------------------------------
+    window_width = 800
+    window_height = 650
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    center_x = int(screen_width/2 - window_width/2)
+    center_y = int(screen_height/2 - window_height/2)
+    
+    root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
     # ----------------------------------------------------
     # 📌 修正1: 「×」ボタンで確実に終了する処理を追加
     # ----------------------------------------------------
     def on_main_window_close():
         """メインウィンドウを閉じる際の処理（アプリケーション全体を終了）"""
-        # (将来的に確認ダイアログなどを追加可能)
-        root.destroy() # メインループを終了
+        root.destroy() 
+    root.protocol("WM_DELETE_WINDOW", on_main_window_close)
 
     # --- 共有変数 ---
-    read_mode_var = tk.StringVar(value="all") 
+    # 📌 修正箇所: value="all" を "unprocessed" に変更
+    read_mode_var = tk.StringVar(value="unprocessed")
     delete_days_var = tk.StringVar(value="14") 
     extract_days_var = tk.StringVar(value="14") 
-    # 📌 修正2: スレッド間通信用のキューを作成
-    gui_queue = queue.Queue()
+    reset_category_var = tk.BooleanVar(value=False) 
+    gui_queue = queue.Queue() # スレッド通信用
+    
     # 2. 初期設定データの読み込み
     saved_account, saved_folder = utils.load_config_csv() 
     if not saved_folder: saved_folder = TARGET_FOLDER_PATH 
@@ -348,33 +394,22 @@ def main():
     main_frame = Frame(root)
     main_frame.pack(padx=10, pady=10, fill='both', expand=True)
     
-    # 設定ボタン用のフレームを画面のトップに作成
+    # ----------------------------------------------------
+    # 📌 修正2: UIウィジェットの定義と配置を先に行う
+    # ----------------------------------------------------
+    
+    # 設定ボタン用のフレーム
     top_button_frame = ttk.Frame(main_frame)
     top_button_frame.pack(fill='x', padx=10, pady=(10, 0))
     top_button_frame.grid_columnconfigure(0, weight=1) 
     top_button_frame.grid_columnconfigure(1, weight=0) 
     
-    # 4. コールバック関数の定義
-    
-    main_elements = {} 
-    
-    def open_settings_callback():
-        gui_elements.open_settings_window(
-            root, main_elements["account_entry"], main_elements["status_label"]
-        )
-    
-    # 設定ボタンの作成と配置
-    settings_button = ttk.Button(
-        top_button_frame, 
-        text="⚙ 設定",
-        command=open_settings_callback
-    )
+    settings_button = ttk.Button(top_button_frame, text="⚙ 設定")
     settings_button.grid(row=0, column=1, padx=(0, 5), pady=5, sticky='e')
 
-    # 1. アカウント/フォルダ設定
+    # アカウント/フォルダ設定
     setting_frame = ttk.LabelFrame(main_frame, text="アカウント/フォルダ設定")
     setting_frame.pack(padx=10, pady=(0, 10), fill='x')
-    
     setting_frame.grid_columnconfigure(1, weight=1)
     
     ttk.Label(setting_frame, text="アカウントメール:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
@@ -387,23 +422,19 @@ def main():
     folder_entry.insert(0, saved_folder)
     folder_entry.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
     
-    # 2. 処理/抽出関連
+    # 処理/抽出関連
     process_frame = ttk.LabelFrame(main_frame, text="メールデータ抽出/検索")
     process_frame.pack(padx=10, pady=10, fill='x')
-    
     process_frame.grid_columnconfigure(0, weight=1)
     process_frame.grid_columnconfigure(1, weight=1)
     
-    # 読み込みモードのラジオボタンフレーム
     mode_frame = ttk.LabelFrame(process_frame, text="読み込みモード")
     mode_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky='ew')
     
-    ttk.Radiobutton(mode_frame, text="全て読み込む (試験用)", variable=read_mode_var, value="all").pack(side=tk.LEFT, padx=10, pady=5)
     ttk.Radiobutton(mode_frame, text="未処理のみ", variable=read_mode_var, value="unprocessed").pack(side=tk.LEFT, padx=10, pady=5)
-    # 期間指定モードのラジオボタン
+    ttk.Radiobutton(mode_frame, text="全て読み込む (試験用)", variable=read_mode_var, value="all").pack(side=tk.LEFT, padx=10, pady=5)
     ttk.Radiobutton(mode_frame, text="期間指定", variable=read_mode_var, value="days").pack(side=tk.LEFT, padx=10, pady=5)
 
-    # 期間日数入力フィールド
     days_frame = ttk.Frame(process_frame)
     days_frame.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky='w')
     ttk.Label(days_frame, text="期間 (N日前まで):").pack(side=tk.LEFT)
@@ -411,81 +442,39 @@ def main():
     extract_days_entry.pack(side=tk.LEFT, padx=5)
     ttk.Label(days_frame, text="日").pack(side=tk.LEFT)
     
-    def run_extraction_callback():
-        run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry)
-        
-    # 抽出実行ボタン
-    run_button = ttk.Button(
-        process_frame, 
-        text="抽出実行", 
-        command=run_extraction_callback
-    )
+    run_button = ttk.Button(process_frame, text="抽出実行")
     run_button.grid(row=2, column=0, padx=5, pady=5, sticky='ew')
     
-# ----------------------------------------------------
-    # 📌 修正2: 検索一覧ボタンのコールバック (Toplevel 起動)
-    # ----------------------------------------------------
-    def open_search_callback():
-        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
-        
-        if not os.path.exists(output_file_abs_path):
-            messagebox.showwarning("警告", f"抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。\n先に抽出を実行してください。")
-            return
-            
-        try:
-            # 1. メインウィンドウを非表示にする
-            root.withdraw() 
-            
-            # 2. 検索ウィンドウを Toplevel として起動 (root を親として渡す)
-            search_app = gui_search_window.App(root, file_path=output_file_abs_path)
-            
-            # 3. Toplevel が閉じられるまで待機 (ここで処理がブロックされる)
-            search_app.wait_window()
-            
-        except Exception as e:
-            messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
-            traceback.print_exc()
-        finally:
-            # 4. Toplevel が閉じたら、メインウィンドウを再表示
-            # (Toplevelが destroy された後に root が deiconify される)
-            # 📌 修正3: 二重破棄エラー回避
-            try:
-                if root.winfo_exists():
-                    root.deiconify()
-            except tk.TclError:
-                pass # アプリケーションが既に破棄されてい
-    search_button = ttk.Button(
-        process_frame, 
-        text="検索一覧 (結果表示)", 
-        command=open_search_callback, 
-        state=tk.DISABLED # 初期状態は無効
-    )
+    search_button = ttk.Button(process_frame, text="検索一覧 (結果表示)", state=tk.DISABLED)
     search_button.grid(row=2, column=1, padx=5, pady=5, sticky='ew')
     
-    # 3. 削除機能のセクション
-    delete_frame = ttk.LabelFrame(main_frame, text="レコード削除（ファイル）")
+    # 削除機能のセクション
+    delete_frame = ttk.LabelFrame(main_frame, text="メール/レコード管理")
     delete_frame.pack(padx=10, pady=(10, 5), fill='x')
-    
     delete_frame.grid_columnconfigure(1, weight=1)
     
-    ttk.Label(delete_frame, text="N日前より古いレコードを削除:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
-    
+    ttk.Label(delete_frame, text="N日前より古いレコード削除:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
     delete_days_entry = ttk.Entry(delete_frame, textvariable=delete_days_var, width=10)
     delete_days_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w')
     ttk.Label(delete_frame, text="日").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w')
     
-    # 削除実行ボタン
-    ttk.Button(
-        delete_frame, 
-        text="削除実行", 
-        command=lambda: run_deletion_thread(root, main_elements) 
-    ).grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
+    delete_button = ttk.Button(delete_frame, text="レコード削除実行")
+    delete_button.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
     
-    # 4. ステータスラベル
+    reset_category_checkbox = ttk.Checkbutton(
+        delete_frame, 
+        text="処理済みマークを解除する", 
+        variable=reset_category_var
+    )
+    reset_category_checkbox.grid(row=2, column=0, columnspan=3, padx=5, pady=(15, 5), sticky='w')
+    
+    # ステータスラベル
     status_label = ttk.Label(main_frame, text="状態: 待機中", relief=tk.SUNKEN, anchor='w')
     status_label.pack(side=tk.BOTTOM, fill='x', padx=10, pady=(5, 0))
     
-    # 5. 全要素を格納する辞書
+    # ----------------------------------------------------
+    # 📌 修正3: 全てのウィジェット作成後に main_elements を定義
+    # ----------------------------------------------------
     main_elements = {
         "account_entry": account_entry,
         "folder_entry": folder_entry,
@@ -494,19 +483,62 @@ def main():
         "delete_days_entry": delete_days_entry, 
         "extract_days_entry": extract_days_entry, 
         "settings_button": settings_button, 
+        "reset_category_var": reset_category_var, 
     }
     
     # ----------------------------------------------------
-    # 📌 修正3: 起動時の検索ボタン状態設定 (ファイル存在チェック)
+    # 📌 修正4: コールバック関数の定義 (main_elements 参照を安全化)
+    # ----------------------------------------------------
+    
+    def open_settings_callback():
+        gui_elements.open_settings_window(
+            root, main_elements["account_entry"], main_elements["status_label"]
+        )
+    
+    def run_extraction_callback():
+        run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry)
+        
+    def open_search_callback():
+        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+        
+        if not os.path.exists(output_file_abs_path):
+            messagebox.showwarning("警告", f"抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。\n先に抽出を実行してください。")
+            return
+            
+        try:
+            root.withdraw() 
+            search_app = gui_search_window.App(root, file_path=output_file_abs_path)
+            search_app.wait_window()
+            
+        except Exception as e:
+            messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
+            traceback.print_exc()
+        finally:
+            try:
+                if root.winfo_exists():
+                    root.deiconify()
+            except tk.TclError:
+                pass 
+    
+    # ----------------------------------------------------
+    # 📌 修正5: ボタンにコマンドを設定
+    # ----------------------------------------------------
+    settings_button.config(command=open_settings_callback)
+    run_button.config(command=run_extraction_callback)
+    search_button.config(command=open_search_callback)
+    delete_button.config(command=lambda: run_deletion_thread(root, main_elements))
+
+    # ----------------------------------------------------
+    # 起動時の処理
     # ----------------------------------------------------
     output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
     
     if os.path.exists(output_file_abs_path):
-        main_elements['search_button'].config(state=tk.NORMAL) # 辞書経由で設定
-        main_elements['status_label'].config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
+        search_button.config(state=tk.NORMAL)
+        status_label.config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
     
     # ----------------------------------------------------
-    # 📌 修正4: 未処理メールの存在チェック (スレッドとGUIキュー)
+    # 📌 修正6: 未処理メールの存在チェック (スレッドとGUIキュー)
     # ----------------------------------------------------
     
     def check_unprocessed_async(account_email, folder_path, q):
@@ -514,13 +546,16 @@ def main():
         [バックグラウンドスレッドで実行]
         未処理メールをカウントし、結果をキューに入れる。
         """
+        # output_file_abs_path をスレッド内で安全に参照
+        output_path_exists = os.path.exists(output_file_abs_path)
+        
         try:
             unprocessed_count = has_unprocessed_mail(folder_path, account_email)
             
             if unprocessed_count > 0:
                 final_message = f"状態: {unprocessed_count}件の新規未処理メールがあります"
             else:
-                if os.path.exists(output_file_abs_path):
+                if output_path_exists:
                     final_message = "状態: 抽出結果ファイルあり。未処理メールはありません。"
                 else:
                     final_message = "状態: 対象のメールはありません" 
@@ -532,6 +567,9 @@ def main():
             q.put(error_msg)
             print(f"未処理チェックスレッドでエラーが発生: {e}")
             
+            if not output_path_exists:
+                q.put("状態: 待機中（チェックエラー）。")
+    
     def check_queue():
         """
         [メインスレッドで実行]
@@ -554,6 +592,7 @@ def main():
     
     # 6. アプリケーションの開始
     root.mainloop()
+
 if __name__ == "__main__":
     main()
     

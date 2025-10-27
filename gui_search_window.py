@@ -145,33 +145,37 @@ class App(tk.Toplevel):
         
         self.show_screen1()
         
-        # 📌 修正3: 「×」ボタンの動作を on_closing_app (アプリ全体終了) に設定
-        self.protocol("WM_DELETE_WINDOW", self.on_closing_app)
+        # 📌 修正: 呼び出す関数名を 'on_closing_app' から 'on_closing' に変更
+        self.protocol("WM_DELETE_WINDOW", self.on_closing)
         
-        # 📌 修正4: Toplevel をモーダル（このウィンドウを閉じないと親を操作できない）にする
+        # Toplevel をモーダルにする
         self.grab_set()
 
-    # 📌 修正5: 「×」ボタンでメインアプリごと終了するロジック
-    def on_closing_app(self):
+    # ----------------------------------------------------
+    # 📌 修正: 'on_closing_app' の定義を 'on_closing' に変更
+    # ----------------------------------------------------
+    def on_closing(self):
         """「×」ボタン用：ウィンドウを閉じ、メインアプリケーション全体を終了させる"""
-        self.grab_release() # モーダルを解除
+        self.grab_release() 
         
         try:
-            self.master.destroy() # 親ウィンドウ (root) を破棄する
+            self.master.destroy() 
         except tk.TclError:
-            pass # 親が既に破棄されている場合は無視
+            pass 
             
         try:
-            self.destroy() # 念のため自分自身も破棄
+            self.destroy()
         except tk.TclError:
             pass
-
-    # 📌 修正6: 「戻る」ボタン用：このウィンドウだけを閉じて、親（抽出画面）に戻る
+            
+    # 📌 修正: 「戻る」ボタン用の 'on_return_to_main' メソッド
     def on_return_to_main(self):
         """「戻る」ボタン用：このToplevelウィンドウのみを閉じ、親を再表示する"""
         self.grab_release()
-        self.master.deiconify() # 👈 親ウィンドウ (root) を再表示
-        self.destroy() # 👈 Toplevel 自体も破棄
+        self.master.deiconify() 
+        self.destroy()
+
+
 
     def _load_data(self, file_path):
         """データファイルを読み込み、必要な列名をリネーム・クリーンアップする"""
@@ -279,15 +283,20 @@ class Screen1(ttk.Frame):
 
         self.rowconfigure(8, weight=1) 
         
+        # 📌 修正1: 
+        # self.rowconfigure(8, weight=1) # 以前は row 8 が伸縮していた
+        
+        # ボタンフレームを row=8 に配置（以前は row=9）
         button_frame = ttk.Frame(self)
-        button_frame.grid(row=9, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
+        button_frame.grid(row=8, column=0, columnspan=2, padx=10, pady=10, sticky='ew')
         
         # 検索ボタン (右寄せ)
         ttk.Button(button_frame, text="検索", command=master.show_screen2).pack(side=tk.RIGHT, padx=5)
-    
-        # 📌 修正7: 「抽出画面に戻る」ボタンを master.on_return_to_main に変更
+        
+        # 📌 修正7: 「抽出画面に戻る」ボタンを追加し、Appの on_return_to_main を呼び出す
         ttk.Button(button_frame, text="抽出画面に戻る", command=self.master.on_return_to_main).pack(side=tk.LEFT, padx=5)
-
+        # 📌 修正2: row 9 を伸縮する空きスペースにする
+        self.rowconfigure(9, weight=1)
 
     def create_range_input(self, label_text, key, row):
         """範囲指定用の入力フィールド（ComboboxまたはEntry）を作成する"""
@@ -372,29 +381,34 @@ class Screen2(ttk.Frame):
         self.setup_treeview()
         self.display_search_results()
 
+        # ----------------------------------------------------
+        # 📌 修正3: ボタンフレーム (row 7) に「戻る」ボタンを移動
+        # ----------------------------------------------------
         button_frame = ttk.Frame(self)
-        button_frame.grid(row=7, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='w')
+        button_frame.grid(row=7, column=0, columnspan=2, padx=10, pady=(10, 0), sticky='ew')
         
         # 本文表示ボタン
         ttk.Button(button_frame, text="本文表示", 
                    command=lambda: self.update_display_area('本文')).pack(side='left', padx=(0, 10))
         
-        # 添付ファイル内容表示ボタンをインスタンス変数として保持
+        # 添付ファイル内容表示ボタン
         self.btn_attachment_content = ttk.Button(
             button_frame, text="添付ファイル内容表示", 
             command=lambda: self.update_display_area('添付ファイル内容'),
-            state='disabled' # 初期状態は無効化 (disabled)
+            state='disabled'
         )
         self.btn_attachment_content.pack(side='left')
         
-        # 本文/添付ファイル内容表示エリア
+        # 「戻る (検索条件へ)」ボタンを右端に配置
+        ttk.Button(button_frame, text="戻る (検索条件へ)", command=master.show_screen1).pack(side='right', padx=10)
+        # ----------------------------------------------------
+        
+        # 本文/添付ファイル内容表示エリア (row 8)
         self.body_text = tk.Text(self, wrap='word', height=10, state='disabled')
         self.body_text.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='nsew')
        
-        # 📌 修正9: 戻るボタンは Screen1 に戻る
-        ttk.Button(self, text="戻る (検索条件へ)", command=master.show_screen1).grid(
-            row=9, column=0, columnspan=2, padx=10, pady=10
-        )
+        # 📌 修正4: row 9 の古い「戻る」ボタンを削除
+        # ttk.Button(self, text="戻る (検索条件へ)", command=master.show_screen1).grid(row=9, ...)
 
 
     def open_email_from_entry(self):
