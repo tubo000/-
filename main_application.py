@@ -260,9 +260,11 @@ def run_deletion_thread(root, main_elements):
     thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(main_elements))
     thread.start()
 
+# main_application.py の actual_run_file_deletion_logic 関数
+
 def actual_run_file_deletion_logic(main_elements):
     
-    # 📌 修正: main_elements から必要なウィジェットを取得
+    # 📌 修正1: main_elements から必要なウィジェットを取得
     days_entry = main_elements["delete_days_entry"] 
     status_label = main_elements["status_label"]
     reset_category_var = main_elements["reset_category_var"]
@@ -273,8 +275,8 @@ def actual_run_file_deletion_logic(main_elements):
     
     try:
         days_ago = int(days_input)
-        if days_ago < 1:
-            raise ValueError("日数は1以上の整数を指定してください。")
+        if days_ago < 0: # 0日（今日のみ）も許可
+            raise ValueError("日数は0以上の整数を指定してください。")
     except ValueError as e:
         messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}")
         status_label.config(text="状態: 削除失敗 (入力不正)。")
@@ -288,7 +290,8 @@ def actual_run_file_deletion_logic(main_elements):
     # カテゴリリセットオプションの取得
     reset_category_flag = reset_category_var.get()
 
-    confirm_prompt = f"🚨 警告: ファイル '{OUTPUT_FILENAME}' 内の '{DATE_COLUMN}' が {days_ago}日より古いレコードを削除します。\n"
+    # 📌 修正2: 確認メッセージの変更
+    confirm_prompt = f"🚨 警告: ファイル '{OUTPUT_FILENAME}' 内の '{DATE_COLUMN}' が【今日から {days_ago} 日前まで】のレコードを削除します。\n"
     if reset_category_flag:
         confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークも解除します。\n\n本当に実行しますか？"
     else:
@@ -299,7 +302,7 @@ def actual_run_file_deletion_logic(main_elements):
         status_label.config(text="状態: 削除処理キャンセル。")
         return
 
-    status_label.config(text=f"状態: {days_ago}日より古いレコードを削除中...")
+    status_label.config(text=f"状態: {days_ago} 日前までのレコードを削除中...")
     
     deleted_count = 0
     reset_count = 0
@@ -311,28 +314,32 @@ def actual_run_file_deletion_logic(main_elements):
         if DATE_COLUMN not in df.columns:
             raise KeyError(f"削除基準となる '{DATE_COLUMN}' カラムがファイルに見つかりません。")
 
-        # 2. 削除基準を計算
-        cutoff_date = datetime.datetime.now() - datetime.timedelta(days=days_ago)
+        # 📌 修正3: 削除の基準となる「カットオフ日」の計算
+        # (N+1)日前の0時0分を計算
+        cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=days_ago)).replace(hour=0, minute=0, second=0, microsecond=0)
         
         # 3. フィルタリングと削除
         initial_count = len(df)
         
         df['受信日時_dt'] = pd.to_datetime(df[DATE_COLUMN], errors='coerce') 
         
-        df_kept = df[df['受信日時_dt'].notna() & (df['受信日時_dt'] >= cutoff_date)].copy()
+        # 📌 修正4: 保持するロジックを「カットオフ日時より古いもの」に変更
+        df_kept = df[df['受信日時_dt'] < cutoff_date].copy()
         
         deleted_count = initial_count - len(df_kept)
         
         # 4. ファイルを上書き保存
-        df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True) 
+        df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True)
         df_kept.to_excel(output_file_path, index=False)
         
         # 5. カテゴリマークのリセット
         if reset_category_flag:
+            # 📌 修正5: カテゴリリセットは「N日より古い」ものだけを対象
+            reset_days_ago = days_ago
             reset_count = remove_processed_category(
                 main_elements["account_entry"].get().strip(), 
                 main_elements["folder_entry"].get().strip(), 
-                days_ago=days_ago
+                days_ago=reset_days_ago
             ) 
         
         msg = f"レコード削除: {deleted_count} 件完了。"
@@ -448,26 +455,36 @@ def main():
     search_button = ttk.Button(process_frame, text="検索一覧 (結果表示)", state=tk.DISABLED)
     search_button.grid(row=2, column=1, padx=5, pady=5, sticky='ew')
     
-    # 削除機能のセクション
+    # 3. 削除機能のセクション
     delete_frame = ttk.LabelFrame(main_frame, text="メール/レコード管理")
     delete_frame.pack(padx=10, pady=(10, 5), fill='x')
-    delete_frame.grid_columnconfigure(1, weight=1)
     
+    # 📌 修正1: カラム1 (Entry) が余白を吸収しないように weight=0 (デフォルト) に変更
+    delete_frame.grid_columnconfigure(0, weight=0) # ラベル
+    delete_frame.grid_columnconfigure(1, weight=0) # Entry
+    delete_frame.grid_columnconfigure(2, weight=0) # 「日」ラベル
+    delete_frame.grid_columnconfigure(3, weight=1) # 👈 最後のカラムで余白を吸収
+
+    # A. レコード削除 (ファイル)
     ttk.Label(delete_frame, text="N日前より古いレコード削除:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
+    
     delete_days_entry = ttk.Entry(delete_frame, textvariable=delete_days_var, width=10)
-    delete_days_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w')
-    ttk.Label(delete_frame, text="日").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w')
+    # 📌 修正2: sticky='w' (左寄せ) を維持
+    delete_days_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w') 
+    # 📌 修正3: 「日」ラベルをカラム2に配置し、sticky='w' で左に寄せる
+    ttk.Label(delete_frame, text="日").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w') 
     
+    # ファイルレコード削除実行ボタン
     delete_button = ttk.Button(delete_frame, text="レコード削除実行")
-    delete_button.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky='ew')
+    delete_button.grid(row=1, column=0, columnspan=4, padx=5, pady=5, sticky='ew') # 👈 columnspanを4に変更
     
+    # B. カテゴリマークリセット
     reset_category_checkbox = ttk.Checkbutton(
         delete_frame, 
         text="処理済みマークを解除する", 
         variable=reset_category_var
     )
-    reset_category_checkbox.grid(row=2, column=0, columnspan=3, padx=5, pady=(15, 5), sticky='w')
-    
+    reset_category_checkbox.grid(row=2, column=0, columnspan=4, padx=5, pady=(15, 5), sticky='w') # 👈 columnspanを4に変更
     # ステータスラベル
     status_label = ttk.Label(main_frame, text="状態: 待機中", relief=tk.SUNKEN, anchor='w')
     status_label.pack(side=tk.BOTTOM, fill='x', padx=10, pady=(5, 0))
