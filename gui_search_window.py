@@ -22,11 +22,20 @@ def create_sample_data():
         'スキル': ['JAVA, Python, C言語, DB', 'C#, Azure', 'Python, AWS', 'JAVA, AWS', 'C#, Unity', 
                  'Python, AI', 'DB, SQL', 'JAVA, DB', 'C#, .NET', 'Python, Django'],
         '本文': [f'これはメール本文{i}です。詳細情報や経歴はこの本文に記述されています。非常に長いメール本文を想定しています。' for i in range(1, 11)],
+        '添付ファイル内容': [f'添付ファイル内にキーワード{i}があります。' for i in range(1, 11)], # 追加
+        '件名': [f'スキルシート送付 {i}件目' for i in range(1, 11)], # 追加
         '年齢': [25, 30, pd.NA, 33, 28, 50, 40, 37, 22, 35], # NaNを含む
         '単価': [50, 65, 70, pd.NA, 60, 80, 75, 50, 60, 70], # NaNを含む
         '実働開始': ['202405', '202501', '202407', '202403', '202506', 
                    '2024年01', pd.NA, '202411', '202402', '202502'], # NaNを含む
     }
+    # サンプルデータをより検索しやすく修正
+    data['本文'][0] = "私のスキルはJavaです。PM経験もあります。単価交渉可能です。"
+    data['スキル'][0] = "JAVA, PM, DB"
+    data['件名'][0] = "PM案件のスキルシート送付"
+    data['本文'][1] = "PythonとAWSを使いこなします。"
+    data['件名'][1] = "AWS案件のシート"
+
     return pd.DataFrame(data)
 
 def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
@@ -197,11 +206,18 @@ class App(tk.Toplevel):
                 '期間_開始':'実働開始',
                 '本文(テキスト形式)':'本文',
                 '本文(ファイル含む)':'添付ファイル内容',
-                'メールURL': 'ENTRY_ID'
+                'メールURL': 'ENTRY_ID',
+                '件名（メール）': '件名' # 📌 修正：件名のリネームを追加
             }
             
             # その他のリネームを適用
             df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, errors='ignore')
+            
+            # 📌 追加: 必要な列の存在保証
+            required_cols = ['スキル', '件名', '本文', '添付ファイル内容']
+            for col in required_cols:
+                if col not in df.columns:
+                    df[col] = '' # 欠けている場合は空の列を追加
             
             # ENTRY_ID列のクリーンアップ
             if 'ENTRY_ID' in df.columns:
@@ -451,6 +467,63 @@ class Screen2(ttk.Frame):
         else:
             self.btn_attachment_content.config(state='disabled') # 無効化
 
+    # 📌 追加: キーワードのデバッグ表示ロジック
+    def _debug_keyword_extraction(self, entry_id, body_row):
+        """
+        指定された行に対して、現在のキーワードを全検索対象列から検索し、
+        ヒット箇所の前後3文字をデバッグコンソールに出力する。
+        """
+        # 検索対象の4列
+        search_cols = ['スキル', '件名', '本文', '添付ファイル内容']
+        keywords = self.master.keywords
+        
+        if not keywords or body_row.empty:
+            return
+
+        print("=====================================================================")
+        print(f"✅ ENTRY_ID: {entry_id} のキーワードヒット箇所を検索中...")
+        
+        # 4つの検索対象列すべてをループ
+        for col_name in search_cols:
+            if col_name not in body_row.columns:
+                continue
+
+            full_data = body_row[col_name].iloc[0]
+            if pd.isna(full_data) or str(full_data).strip() == '':
+                continue # データがなければスキップ
+                
+            full_text = str(full_data).replace('_x000D_', '')
+            full_text_lower = full_text.lower()
+            
+            # 各列に対してキーワードを検索
+            for keyword in keywords:
+                lower_keyword = keyword.lower()
+                if not lower_keyword: continue
+                
+                # キーワードの出現位置をすべて検索
+                current_search_pos = 0 
+                while True:
+                    start_index = full_text_lower.find(lower_keyword, current_search_pos)
+                    if start_index == -1:
+                        break # 見つからなければ終了
+                        
+                    end_index = start_index + len(lower_keyword)
+                    current_search_pos = end_index 
+                    
+                    # 前後3文字の範囲を計算
+                    start_context = max(0, start_index - 3)
+                    end_context = min(len(full_text), end_index + 3)
+                    
+                    # 抽出した文字列 (元の文字列から抽出)
+                    extracted_text = full_text[start_context:end_context]
+                    
+                    # デバッグコンソールに出力
+                    print(f"  - [{col_name}] キーワード '{keyword}'")
+                    print(f"    -> 抽出: '{extracted_text}' (文字位置: {start_index})")
+
+        print("=====================================================================")
+
+
     def update_display_area(self, content_type):
         """本文または添付ファイル内容を下のテキストエリアに表示する"""
         selected_items = self.tree.selection()
@@ -459,11 +532,13 @@ class Screen2(ttk.Frame):
         item_id = selected_items[0]
         email_body = "データを取得できませんでした。"
         full_text = ""
+        entry_id = "" # entry_id の初期化
+        body_row = pd.DataFrame() # body_row の初期化
         
         try:
             id_index = list(self.tree['columns']).index('ENTRY_ID')
             tree_values = self.tree.item(item_id, 'values')
-            entry_id = tree_values[id_index]
+            entry_id = tree_values[id_index] # entry_id の取得
             
             body_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
             if not body_row.empty and content_type in body_row.columns:
@@ -479,6 +554,9 @@ class Screen2(ttk.Frame):
             else:
                 email_body = f"{content_type} のデータが空です。"
 
+            # --- 📌 修正箇所: キーワード抽出を全列に対して実行 ---
+            self._debug_keyword_extraction(entry_id, body_row)
+            # --- 修正箇所 終了 ---
             
         except (ValueError, IndexError):
             email_body = "選択された行からIDを取得できませんでした。"
@@ -618,7 +696,8 @@ class Screen2(ttk.Frame):
         self.tree.selection_set(item_id)
         
         self.copy_id_to_entry(item_id)
-        self.show_email_body(item_id)
+        # 📌 修正: update_display_area('本文') を呼び出すことで、本文表示とキーワードデバッグを同時に実行
+        self.update_display_area('本文') 
 
     def copy_id_to_entry(self, item_id):
         try:
@@ -636,37 +715,9 @@ class Screen2(ttk.Frame):
         except ValueError:
             pass
 
-    def show_email_body(self, item_id):
-        email_body = "本文データを取得できませんでした。"
-        full_text = ""
-        try:
-            entry_id_col_index = list(self.tree['columns']).index('ENTRY_ID')
-            tree_values = self.tree.item(item_id, 'values')
-            entry_id = tree_values[entry_id_col_index]
-            
-            body_row = self.master.df_all_skills[self.master.df_all_skills['ENTRY_ID'].astype(str) == str(entry_id)]
-            if not body_row.empty and '本文' in body_row.columns:
-                full_data = body_row['本文'].iloc[0]
-                if pd.notna(full_data) and str(full_data).strip() != '':
-                    full_text = str(full_data)
-                    full_text = full_text.replace('_x000D_', '')
-                    # 1000文字に制限
-                    email_body = str(full_text)[:1000]
-                    if len(full_text) > 1000:
-                        email_body += "...\n\n[--- 1000文字以降は省略 ---]"
-                else:
-                   email_body = "本文のデータが空です。"
-
-            else:
-                email_body = f"ID: {entry_id} の本文データが元のリストに見つかりません。"
-            
-        except (ValueError, IndexError):
-            pass
-        
-        self.body_text.config(state='normal') 
-        self.body_text.delete(1.0, tk.END) 
-        self.body_text.insert(tk.END, email_body)
-        self.body_text.config(state='disabled')
+    # 📌 削除: show_email_body は update_display_area に統合されたため削除
+    # def show_email_body(self, item_id):
+    #     # ... (削除) ...
 
 
 # ==============================================================================
