@@ -7,7 +7,8 @@ from tkinter import ttk
 import pandas as pd
 import os
 import main_application
-from email_processor import OUTPUT_FILENAME # 👈 config.py ではなく、email_processor からインポート
+# 📌 修正4: email_processor ではなく config からインポート
+from config import OUTPUT_CSV_FILE as OUTPUT_FILENAME
 
 # ==============================================================================
 # 0. 共通ユーティリティ（データ処理ロジック）
@@ -117,13 +118,38 @@ def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd
 class App(tk.Toplevel):
     """メインウィンドウとアプリケーションの状態を管理するクラス"""
     
-    # 📌 修正2: __init__ で親 (parent) を受け取る
-    def __init__(self, parent, file_path=OUTPUT_FILENAME):
-        super().__init__(parent) # 👈 親ウィンドウを Toplevel に渡す
-        self.master = parent # 👈 親 (root) への参照を保持
+    # 📌 修正2: __init__ で 'file_path' の代わりに 'data_frame' を受け取る
+    def __init__(self, parent, data_frame: pd.DataFrame):
+        super().__init__(parent) 
+        self.master = parent 
         
         self.title("スキルシート検索アプリ")
-        #ウィンドウを中央に配置するロジック
+        
+        # ----------------------------------------------------
+        # 📌 修正1: 属性（変数）の初期化を先に行う
+        # ----------------------------------------------------
+        self.keywords = []      
+        self.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}} 
+        
+        # 
+        # (self.all_cands は create_range_input が参照するため、先に定義)
+        self.all_cands = {
+            'age': [str(i) for i in range(20, 71, 5)], 
+            'price': [str(i) for i in range(50, 101, 10)],
+            'start': ['202401', '202404', '202407', '202410', '202501', '202504']
+        }
+        
+        # 📌 修正3: データ読み込みを _load_data から data_frame 引数に変更
+        self.df_all_skills = self._clean_data(data_frame) # 👈 _load_data を _clean_data に変更
+        self.df_filtered_skills = self.df_all_skills.copy()
+        
+        # (current_frame は show_screen1 が参照するため、先に定義)
+        self.current_frame = None 
+        self.screen1 = None
+        self.screen2 = None
+        # ----------------------------------------------------
+
+        # ウィンドウサイズと位置の設定
         window_width = 900
         window_height = 700
         screen_width = self.winfo_screenwidth()
@@ -132,33 +158,20 @@ class App(tk.Toplevel):
         center_y = int(screen_height/2 - window_height/2)
         self.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
         
-        # --- 共有データ ---
-        self.keywords = []      
-        self.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}} 
-        self.all_cands = {
-            'age': [str(i) for i in range(20, 71, 5)], 
-            'price': [str(i) for i in range(50, 101, 10)],
-            'start': ['202401', '202404', '202407', '202410', '202501', '202504']
-        }
-        
-        # データ読み込み
-        self.df_all_skills = self._load_data(file_path)
-        self.df_filtered_skills = self.df_all_skills.copy()
-        
-        self.current_frame = None
-        self.screen1 = None
-        self.screen2 = None
-        
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        
+
+        # 📌 修正2: 属性を初期化した後で、画面表示を呼び出す
         self.show_screen1()
         
-        # 📌 修正: 呼び出す関数名を 'on_closing_app' から 'on_closing' に変更
-        self.protocol("WM_DELETE_WINDOW", self.on_closing)
+        # 「×」ボタンの動作 (on_closing_app ではなく on_closing を使用)
+        self.protocol("WM_DELETE_WINDOW", self.on_closing) 
         
         # Toplevel をモーダルにする
         self.grab_set()
+
+    # ... (以降の on_closing, _load_data, show_screen1 メソッドなどは変更なし) ...
+    # 📌
 
     # ----------------------------------------------------
     # 📌 修正: 'on_closing_app' の定義を 'on_closing' に変更
@@ -186,17 +199,10 @@ class App(tk.Toplevel):
 
 
 
-    def _load_data(self, file_path):
-        """データファイルを読み込み、必要な列名をリネーム・クリーンアップする"""
-        if not os.path.exists(file_path):
-            print(f"警告: ファイル '{file_path}' が見つかりません。テストデータを作成します。")
-            return create_sample_data()
-
+    # 📌 修正4: _load_data を _clean_data に変更 (読み込み処理は main_app が行うため)
+    def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """main_appから渡されたDataFrameをクリーンアップし、UIで使えるようにする"""
         try:
-            # 📌 修正: engine='openpyxl' を明示的に指定
-            df = pd.read_excel(file_path, engine='openpyxl') 
-            print(f"ファイル '{file_path}' をXLSX/XLS形式で読み込みました。")
-            
             df.columns = df.columns.str.strip()
             
             rename_map = {
@@ -206,28 +212,24 @@ class App(tk.Toplevel):
                 '期間_開始':'実働開始',
                 '本文(テキスト形式)':'本文',
                 '本文(ファイル含む)':'添付ファイル内容',
-                'メールURL': 'ENTRY_ID',
-                '件名（メール）': '件名' # 📌 修正：件名のリネームを追加
+                'メールURL': 'ENTRY_ID'
             }
             
-            # その他のリネームを適用
+            if '期間_開始' in df.columns:
+                 df = df.rename(columns={'期間_開始': '実働開始'}, errors='ignore')
+            elif '実働開始' not in df.columns:
+                 df['実働開始'] = 'N/A'
+                 
             df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns}, errors='ignore')
             
-            # 📌 追加: 必要な列の存在保証
-            required_cols = ['スキル', '件名', '本文', '添付ファイル内容']
-            for col in required_cols:
-                if col not in df.columns:
-                    df[col] = '' # 欠けている場合は空の列を追加
-            
-            # ENTRY_ID列のクリーンアップ
             if 'ENTRY_ID' in df.columns:
                 df['ENTRY_ID'] = df['ENTRY_ID'].astype(str).str.replace('outlook:', '', regex=False).str.strip()
                 df = df[df['ENTRY_ID'].astype(str).str.len() > 10].reset_index(drop=True)
-                
+            
             return df
 
         except Exception as e:
-            print(f"🚨 エラー: データ読み込みに失敗しました。詳細: {e}。テストデータを作成します。")
+            print(f"🚨 エラー: データクリーンアップに失敗しました。詳細: {e}。テストデータを作成します。")
             return create_sample_data()
 
     # 📌 修正3: 重複していた show_screen1 の定義を削除
@@ -731,7 +733,9 @@ def main():
     # このファイルが直接実行された場合（テスト用）
     root = tk.Tk()
     root.withdraw() # メインのrootは隠す
-    app = App(root, file_path=os.path.abspath(OUTPUT_FILENAME))
+    # 📌 修正10: テスト用にダミーの DataFrame を渡す
+    df_dummy = create_sample_data() 
+    app = App(root, data_frame=df_dummy) # data_frame 引数で渡す
     app.mainloop()
 if __name__ == "__main__":
     main()

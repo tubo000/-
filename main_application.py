@@ -1,5 +1,4 @@
 # main_application.py (GUI統合とメイン実行フロー - Toplevel修正版)
-
 import os
 import sys
 import pandas as pd
@@ -12,20 +11,20 @@ import re
 import traceback 
 import os.path
 import datetime 
-import queue # 📌 スレッドセーフなキュー
+import queue 
+import sqlite3 # 📌 修正1: sqlite3 をインポート
 
 # 外部モジュールのインポート
 import gui_elements
-import gui_search_window # 📌 Appクラスをインポートするために使用
+import gui_search_window 
 import utils 
 
 # 既存の内部処理関数をインポート
 from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
 from extraction_core import extract_skills_data
 from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
-# 📌 修正1: OUTPUT_FILENAME を config からエイリアスとしてインポート
-# ✅ 修正後 (email_processor.py の XLSX ファイルを参照)
-from email_processor import get_mail_data_from_outlook_in_memory, OUTPUT_FILENAME 
+# 📌 修正2: email_processor から DB_NAME をインポート
+from email_processor import get_mail_data_from_outlook_in_memory, DATABASE_NAME 
 from email_processor import has_unprocessed_mail 
 from email_processor import remove_processed_category, PROCESSED_CATEGORY_NAME
 # ----------------------------------------------------
@@ -78,6 +77,8 @@ def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 # 抽出処理ロジック
 # ----------------------------------------------------
 
+# main_application.py の actual_run_extraction_logic 関数 (sqlite3版・KeyError修正)
+
 def actual_run_extraction_logic(root, main_elements, target_email, folder_path, read_mode, read_days, status_label):
     
     try:
@@ -113,13 +114,16 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
             messagebox.showinfo("完了", "処理対象のメールがありませんでした。")
             return
 
-        # main_application.py の actual_run_extraction_logic 関数内 (修正箇所)
-
         status_label.config(text="状態: 抽出コアロジック実行中...")
         df_extracted = extract_skills_data(df_mail_data)
         
+        # ----------------------------------------------------
         # Excel出力処理の準備
+        # ----------------------------------------------------
+        
+        # 📌 修正1: DATE_COLUMN はここで定義されています
         DATE_COLUMN = '受信日時'
+        
         df_output = df_extracted.copy()
         date_key_df = df_mail_data[['EntryID', '受信日時']].copy()
         
@@ -128,21 +132,16 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
             
         df_output = pd.merge(df_output, date_key_df, on='EntryID', how='left')
 
-        # ----------------------------------------------------
-        # 📌 修正1: EntryID を追記処理で使うため、ここで一時列を作成
-        # ----------------------------------------------------
+        # EntryIDをURLに変換し、比較用の EntryID_temp を作成
         if 'EntryID' in df_output.columns:
-             # メールURL の生成
              if 'メールURL' not in df_output.columns:
                  df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
-             
-             # 比較用の EntryID_temp を作成
              df_output['EntryID_temp'] = df_output['EntryID'].str.replace('outlook:', '', regex=False).str.strip()
 
         # 列順の整理
         df_output = reorder_output_dataframe(df_output)
         
-        # 📌 修正2: EntryID を final_drop_list から削除 (まだ保持する)
+        # EntryID は追記処理で必要なため、ここでは削除しない
         final_drop_list = ['宛先メール', '本文(抽出元結合)'] 
         final_drop_list = [col for col in df_output.columns if col in final_drop_list]
         df_output = df_output.drop(columns=final_drop_list, errors='ignore')
@@ -155,10 +154,16 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         # ----------------------------------------------------
         # ★★★ Excel 既存ファイルへの追記ロジック (上書き解消) ★★★
         # ----------------------------------------------------
-        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+        
+        # 📌 修正2: OUTPUT_FILENAME はグローバルスコープから参照されます (インポート済み)
+        output_file_abs_path = os.path.abspath(DATABASE_NAME)
         df_final = df_output.copy() 
 
-        # 📌 修正3: df_output の EntryID_temp をリストとして取得
+        # 結合前に、新規データ(df_final)の日付型を変換
+        if DATE_COLUMN in df_final.columns:
+            df_final[DATE_COLUMN] = pd.to_datetime(df_final[DATE_COLUMN], errors='coerce')
+
+        # 比較用の EntryID_temp をリストとして取得
         current_entry_ids = []
         if 'EntryID_temp' in df_final.columns:
             current_entry_ids = df_final['EntryID_temp'].tolist()
@@ -171,35 +176,36 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
                     
                     df_existing['TempEntryID'] = df_existing['メールURL'].str.replace('outlook:', '', regex=False).str.strip()
                     
-                    # 📌 修正4: current_entry_ids を使って重複排除
+                    # 重複しない既存のレコードのみを保持
                     df_existing_unique = df_existing[~df_existing['TempEntryID'].isin(current_entry_ids)].copy()
                     df_existing_unique.drop(columns=['TempEntryID'], errors='ignore', inplace=True)
                     
+                    # 結合前に、既存データ(df_existing_unique)の日付型も変換
                     if DATE_COLUMN in df_existing_unique.columns:
                          df_existing_unique[DATE_COLUMN] = pd.to_datetime(df_existing_unique[DATE_COLUMN], errors='coerce')
 
+                    # 新しいデータ (df_final) を最上部にして連結
                     df_final = pd.concat([df_final, df_existing_unique], ignore_index=True)
                 else:
                     df_final = pd.concat([df_final, df_existing], ignore_index=True)
                     
             except Exception as e:
                 print(f"❌ 既存Excelファイル読み込み/追記中にエラー発生。新しいデータのみ保存: {e}")
-                df_final = df_output
+                df_final = df_output # 失敗した場合、新しいデータのみを保存
         
         # ----------------------------------------------------
         # 最終調整と書き出し
         # ----------------------------------------------------
         
-        # 日時でソート
+        # 結合後に全体を日付でソート（日付順が最優先）
         if DATE_COLUMN in df_final.columns:
-            df_final[DATE_COLUMN] = pd.to_datetime(df_final[DATE_COLUMN], errors='coerce')
             df_final = df_final.sort_values(by=DATE_COLUMN, ascending=False).reset_index(drop=True)
         
-        # 📌 修正5: 最後に EntryID と EntryID_temp を削除
+        # 最後に EntryID と EntryID_temp を削除
         final_drop_list_after_merge = ['EntryID', 'EntryID_temp'] 
         df_final = df_final.drop(columns=final_drop_list_after_merge, errors='ignore')
         
-        # 日時を書式設定
+        # Excel書き出し用に日時型を文字列形式に戻す (Excelでの表示安定化)
         if DATE_COLUMN in df_final.columns and df_final[DATE_COLUMN].dtype != object:
             df_final[DATE_COLUMN] = df_final[DATE_COLUMN].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
         
@@ -207,7 +213,7 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         df_final.to_excel(output_file_abs_path, index=False) 
         # ----------------------------------------------------
 
-        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{OUTPUT_FILENAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
+        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{DATABASE_NAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
         status_label.config(text=f"状態: 処理完了。ファイル出力済み。")
         
         search_button = main_elements.get("search_button")
@@ -221,9 +227,8 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         
     finally:
         pythoncom.CoUninitialize()
-
 def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry):
-    """GUIをブロックしないよう、抽出処理を別スレッドで実行するラッパー。"""
+    # ... (変更なし) ...
     account_email = main_elements["account_entry"].get().strip()
     folder_path = main_elements["folder_entry"].get().strip()
     status_label = main_elements["status_label"]
@@ -239,59 +244,42 @@ def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry
     thread.start()
 
 # ----------------------------------------------------
-# ファイル内のレコード削除ロジック
+# 📌 修正7: ファイル内のレコード削除ロジック (sqlite3版)
 # ----------------------------------------------------
 
-# main_application.py の run_deletion_thread 関数
-
 def run_deletion_thread(root, main_elements):
-    """GUIをブロックしないよう、ファイルレコード削除を別スレッドで実行するラッパー。"""
-    
-    # 📌 修正: lambda が渡す引数を main_elements に変更
-    #          (days_entry と status_label は actual_run_file_deletion_logic 側で
-    #           main_elements から取得するため、ここで渡す必要はありません)
-
-    # ❌ 修正前 (2つの引数を渡している)
-    # days_entry = main_elements["delete_days_entry"] 
-    # status_label = main_elements["status_label"]
-    # thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(days_entry, status_label))
-
-    # ✅ 修正後 (main_elements という1つの引数を渡す)
+    """GUIをブロックしないよう、DBレコード削除を別スレッドで実行するラッパー。"""
     thread = threading.Thread(target=lambda: actual_run_file_deletion_logic(main_elements))
     thread.start()
 
-# main_application.py の actual_run_file_deletion_logic 関数
-
 def actual_run_file_deletion_logic(main_elements):
     
-    # 📌 修正1: main_elements から必要なウィジェットを取得
     days_entry = main_elements["delete_days_entry"] 
     status_label = main_elements["status_label"]
     reset_category_var = main_elements["reset_category_var"]
     
     days_input = days_entry.get().strip()
-    output_file_path = os.path.abspath(OUTPUT_FILENAME)
+    db_path = os.path.abspath(DATABASE_NAME)
     DATE_COLUMN = '受信日時' # 削除基準となるカラム名
     
     try:
         days_ago = int(days_input)
-        if days_ago < 0: # 0日（今日のみ）も許可
-            raise ValueError("日数は0以上の整数を指定してください。")
+        if days_ago < 1:
+            raise ValueError("日数は1以上の整数を指定してください。")
     except ValueError as e:
         messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}")
         status_label.config(text="状態: 削除失敗 (入力不正)。")
         return
 
-    if not os.path.exists(output_file_path):
-        messagebox.showwarning("警告", f"ファイルが見つかりません。削除処理をスキップします: {OUTPUT_FILENAME}")
+    if not os.path.exists(db_path):
+        messagebox.showwarning("警告", f"データベースファイルが見つかりません。削除処理をスキップします: {DATABASE_NAME}")
         status_label.config(text="状態: ファイルなし。")
         return
 
     # カテゴリリセットオプションの取得
     reset_category_flag = reset_category_var.get()
 
-    # 📌 修正2: 確認メッセージの変更
-    confirm_prompt = f"🚨 警告: ファイル '{OUTPUT_FILENAME}' 内の '{DATE_COLUMN}' が【今日から {days_ago} 日前まで】のレコードを削除します。\n"
+    confirm_prompt = f"🚨 警告: データベース内の '{DATE_COLUMN}' が {days_ago}日より古いレコードを削除します。\n"
     if reset_category_flag:
         confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークも解除します。\n\n本当に実行しますか？"
     else:
@@ -302,44 +290,33 @@ def actual_run_file_deletion_logic(main_elements):
         status_label.config(text="状態: 削除処理キャンセル。")
         return
 
-    status_label.config(text=f"状態: {days_ago} 日前までのレコードを削除中...")
+    status_label.config(text=f"状態: {days_ago}日より古いレコードを削除中...")
     
     deleted_count = 0
     reset_count = 0
     
     try:
-        # 1. ファイルを読み込み
-        df = pd.read_excel(output_file_path)
+        conn = sqlite3.connect(db_path)
+        cursor = conn.cursor()
         
-        if DATE_COLUMN not in df.columns:
-            raise KeyError(f"削除基準となる '{DATE_COLUMN}' カラムがファイルに見つかりません。")
+        # 1. 削除基準を計算 (YYYY-MM-DD HH:MM:SS 形式)
+        cutoff_date_dt = datetime.datetime.now() - datetime.timedelta(days=days_ago)
+        cutoff_date_str = cutoff_date_dt.strftime('%Y-%m-%d %H:%M:%S')
 
-        # 📌 修正3: 削除の基準となる「カットオフ日」の計算
-        # (N+1)日前の0時0分を計算
-        cutoff_date = (datetime.datetime.now() - datetime.timedelta(days=days_ago)).replace(hour=0, minute=0, second=0, microsecond=0)
+        # 2. 削除対象の件数を取得 (オプション)
+        cursor.execute(f"SELECT COUNT(*) FROM emails WHERE \"{DATE_COLUMN}\" < ?", (cutoff_date_str,))
+        deleted_count = cursor.fetchone()[0]
         
-        # 3. フィルタリングと削除
-        initial_count = len(df)
+        # 3. 削除を実行
+        cursor.execute(f"DELETE FROM emails WHERE \"{DATE_COLUMN}\" < ?", (cutoff_date_str,))
+        conn.commit()
         
-        df['受信日時_dt'] = pd.to_datetime(df[DATE_COLUMN], errors='coerce') 
-        
-        # 📌 修正4: 保持するロジックを「カットオフ日時より古いもの」に変更
-        df_kept = df[df['受信日時_dt'] < cutoff_date].copy()
-        
-        deleted_count = initial_count - len(df_kept)
-        
-        # 4. ファイルを上書き保存
-        df_kept.drop(columns=['受信日時_dt'], errors='ignore', inplace=True)
-        df_kept.to_excel(output_file_path, index=False)
-        
-        # 5. カテゴリマークのリセット
+        # 4. カテゴリマークのリセット
         if reset_category_flag:
-            # 📌 修正5: カテゴリリセットは「N日より古い」ものだけを対象
-            reset_days_ago = days_ago
             reset_count = remove_processed_category(
                 main_elements["account_entry"].get().strip(), 
                 main_elements["folder_entry"].get().strip(), 
-                days_ago=reset_days_ago
+                days_ago=days_ago
             ) 
         
         msg = f"レコード削除: {deleted_count} 件完了。"
@@ -350,13 +327,14 @@ def actual_run_file_deletion_logic(main_elements):
         status_label.config(text="状態: 削除処理完了。")
         
     except Exception as e:
-        messagebox.showerror("削除エラー", f"ファイルレコード削除中にエラーが発生しました。\n詳細: {e}")
+        messagebox.showerror("削除エラー", f"データベース処理中にエラーが発生しました。\n詳細: {e}")
         status_label.config(text="状態: 削除エラー。")
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
 # ----------------------------------------------------
 # メイン実行関数 (GUI起動)
 # ----------------------------------------------------
-
-# main_application.py の main() 関数
 
 # main_application.py の main() 関数
 
@@ -515,16 +493,25 @@ def main():
     def run_extraction_callback():
         run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry)
         
+    # 📌 修正8: 検索一覧ボタンのコールバック (sqlite3版)
     def open_search_callback():
-        output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+        db_path = os.path.abspath(DATABASE_NAME)
         
-        if not os.path.exists(output_file_abs_path):
-            messagebox.showwarning("警告", f"抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。\n先に抽出を実行してください。")
+        if not os.path.exists(db_path):
+            messagebox.showwarning("警告", f"データベースファイル ('{DATABASE_NAME}') が見つかりません。\n先に抽出を実行してください。")
             return
             
         try:
             root.withdraw() 
-            search_app = gui_search_window.App(root, file_path=output_file_abs_path)
+            
+            # データベースから DataFrame を読み込む
+            conn = sqlite3.connect(db_path)
+            df_for_gui = pd.read_sql_query("SELECT * FROM emails", conn)
+            conn.close()
+
+            # 📌 修正9: gui_search_window.py の __init__ に DataFrame を渡す
+            # (注意: gui_search_window.py 側の __init__ と _load_data も修正が必要です)
+            search_app = gui_search_window.App(root, data_frame=df_for_gui) 
             search_app.wait_window()
             
         except Exception as e:
@@ -535,7 +522,7 @@ def main():
                 if root.winfo_exists():
                     root.deiconify()
             except tk.TclError:
-                pass 
+                pass
     
     # ----------------------------------------------------
     # 📌 修正5: ボタンにコマンドを設定
@@ -548,7 +535,7 @@ def main():
     # ----------------------------------------------------
     # 起動時の処理
     # ----------------------------------------------------
-    output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
+    output_file_abs_path = os.path.abspath(DATABASE_NAME) # 👈 .xlsx から .db に変更
     
     if os.path.exists(output_file_abs_path):
         search_button.config(state=tk.NORMAL)
