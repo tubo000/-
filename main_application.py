@@ -23,7 +23,7 @@ import utils
 from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
 from extraction_core import extract_skills_data
 from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
-# 📌 修正2: email_processor から DB_NAME をインポート
+# 📌 修正2: email_processor から DB_NAME をインポート (OUTPUT_FILENAME ではない)
 from email_processor import get_mail_data_from_outlook_in_memory, DATABASE_NAME 
 from email_processor import has_unprocessed_mail 
 from email_processor import remove_processed_category, PROCESSED_CATEGORY_NAME
@@ -79,6 +79,8 @@ def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
 
 # main_application.py の actual_run_extraction_logic 関数 (sqlite3版・KeyError修正)
 
+# main_application.py の actual_run_extraction_logic 関数 (sqlite3版・KeyError修正)
+
 def actual_run_extraction_logic(root, main_elements, target_email, folder_path, read_mode, read_days, status_label):
     
     try:
@@ -118,103 +120,69 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         df_extracted = extract_skills_data(df_mail_data)
         
         # ----------------------------------------------------
-        # Excel出力処理の準備
+        # データベース書き込み処理
         # ----------------------------------------------------
-        
-        # 📌 修正1: DATE_COLUMN はここで定義されています
-        DATE_COLUMN = '受信日時'
         
         df_output = df_extracted.copy()
         date_key_df = df_mail_data[['EntryID', '受信日時']].copy()
         
-        if DATE_COLUMN in df_output.columns:
-            df_output.drop(columns=[DATE_COLUMN], inplace=True, errors='ignore')
+        if '受信日時' in df_output.columns:
+            df_output.drop(columns=['受信日時'], inplace=True, errors='ignore')
             
         df_output = pd.merge(df_output, date_key_df, on='EntryID', how='left')
 
-        # EntryIDをURLに変換し、比較用の EntryID_temp を作成
-        if 'EntryID' in df_output.columns:
-             if 'メールURL' not in df_output.columns:
-                 df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
-             df_output['EntryID_temp'] = df_output['EntryID'].str.replace('outlook:', '', regex=False).str.strip()
+        if 'EntryID' in df_output.columns and 'メールURL' not in df_output.columns:
+             df_output.insert(0, 'メールURL', df_output.apply(lambda row: f"outlook:{row['EntryID']}", axis=1))
 
         # 列順の整理
         df_output = reorder_output_dataframe(df_output)
         
-        # EntryID は追記処理で必要なため、ここでは削除しない
-        final_drop_list = ['宛先メール', '本文(抽出元結合)'] 
+        # 📌 修正1: EntryID をDB保存まで保持するため、ここでは削除しない
+        # final_drop_list = ['EntryID', '宛先メール', '本文(抽出元結合)'] 
+        final_drop_list = ['宛先メール', '本文(抽出元結合)'] # EntryIDをリストから除外
         final_drop_list = [col for col in df_output.columns if col in final_drop_list]
         df_output = df_output.drop(columns=final_drop_list, errors='ignore')
         
-        # 受信日時カラムを保護しつつ、他の文字列をエスケープ
-        for col in df_output.columns:
-            if col != DATE_COLUMN and df_output[col].dtype == object:
-                df_output[col] = df_output[col].str.replace(r'^=', r"'=", regex=True)
-                
         # ----------------------------------------------------
-        # ★★★ Excel 既存ファイルへの追記ロジック (上書き解消) ★★★
+        # 📌 修正2: データベース (sqlite3) への追記ロジック
         # ----------------------------------------------------
-        
-        # 📌 修正2: OUTPUT_FILENAME はグローバルスコープから参照されます (インポート済み)
-        output_file_abs_path = os.path.abspath(DATABASE_NAME)
-        df_final = df_output.copy() 
-
-        # 結合前に、新規データ(df_final)の日付型を変換
-        if DATE_COLUMN in df_final.columns:
-            df_final[DATE_COLUMN] = pd.to_datetime(df_final[DATE_COLUMN], errors='coerce')
-
-        # 比較用の EntryID_temp をリストとして取得
-        current_entry_ids = []
-        if 'EntryID_temp' in df_final.columns:
-            current_entry_ids = df_final['EntryID_temp'].tolist()
-
-        if os.path.exists(output_file_abs_path):
+        db_path = os.path.abspath(DATABASE_NAME) # 👈 DATABASE_NAME を email_processor からインポートする必要あり
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path)
+            
+            # 📌 修正3: EntryID カラムが存在するため、set_index が成功する
+            df_output.set_index('EntryID', inplace=True)
+            
+            # 既存のデータを読み込む (EntryID のみ)
             try:
-                df_existing = pd.read_excel(output_file_abs_path, dtype=str)
-                
-                if 'メールURL' in df_existing.columns:
-                    
-                    df_existing['TempEntryID'] = df_existing['メールURL'].str.replace('outlook:', '', regex=False).str.strip()
-                    
-                    # 重複しない既存のレコードのみを保持
-                    df_existing_unique = df_existing[~df_existing['TempEntryID'].isin(current_entry_ids)].copy()
-                    df_existing_unique.drop(columns=['TempEntryID'], errors='ignore', inplace=True)
-                    
-                    # 結合前に、既存データ(df_existing_unique)の日付型も変換
-                    if DATE_COLUMN in df_existing_unique.columns:
-                         df_existing_unique[DATE_COLUMN] = pd.to_datetime(df_existing_unique[DATE_COLUMN], errors='coerce')
+                existing_ids = pd.read_sql_query("SELECT EntryID FROM emails", conn)['EntryID'].tolist()
+            except pd.io.sql.DatabaseError:
+                existing_ids = [] # テーブルがまだない
 
-                    # 新しいデータ (df_final) を最上部にして連結
-                    df_final = pd.concat([df_final, df_existing_unique], ignore_index=True)
-                else:
-                    df_final = pd.concat([df_final, df_existing], ignore_index=True)
-                    
-            except Exception as e:
-                print(f"❌ 既存Excelファイル読み込み/追記中にエラー発生。新しいデータのみ保存: {e}")
-                df_final = df_output # 失敗した場合、新しいデータのみを保存
-        
-        # ----------------------------------------------------
-        # 最終調整と書き出し
-        # ----------------------------------------------------
-        
-        # 結合後に全体を日付でソート（日付順が最優先）
-        if DATE_COLUMN in df_final.columns:
-            df_final = df_final.sort_values(by=DATE_COLUMN, ascending=False).reset_index(drop=True)
-        
-        # 最後に EntryID と EntryID_temp を削除
-        final_drop_list_after_merge = ['EntryID', 'EntryID_temp'] 
-        df_final = df_final.drop(columns=final_drop_list_after_merge, errors='ignore')
-        
-        # Excel書き出し用に日時型を文字列形式に戻す (Excelでの表示安定化)
-        if DATE_COLUMN in df_final.columns and df_final[DATE_COLUMN].dtype != object:
-            df_final[DATE_COLUMN] = df_final[DATE_COLUMN].dt.strftime('%Y-%m-%d %H:%M:%S').fillna('')
-        
-        # Excelファイルへの書き出し (常に最終結果で上書き)
-        df_final.to_excel(output_file_abs_path, index=False) 
+            # 新規データのみ (df_output) を抽出
+            df_new = df_output[~df_output.index.isin(existing_ids)]
+            
+            # 更新データ (df_output) を抽出
+            df_update = df_output[df_output.index.isin(existing_ids)]
+            
+            if not df_new.empty:
+                df_new.to_sql('emails', conn, if_exists='append', index=True) # index=True で EntryID を保存
+                print(f"DEBUG: データベースに {len(df_new)} 件の新規レコードを追加しました。")
+
+            if not df_update.empty:
+                # (更新ロジックはスキップ)
+                print(f"DEBUG: {len(df_update)} 件の既存レコードが見つかりましたが、更新はスキップされました。")
+
+        except Exception as e:
+            print(f"❌ データベース書き込み中にエラー発生: {e}")
+        finally:
+            if conn:
+                conn.close()
         # ----------------------------------------------------
 
-        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{DATABASE_NAME}' に出力されました。\n検索一覧ボタンを押して結果を確認してください。")
-        status_label.config(text=f"状態: 処理完了。ファイル出力済み。")
+        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n'{DATABASE_NAME}' に保存されました。\n検索一覧ボタンを押して結果を確認してください。")
+        status_label.config(text=f"状態: 処理完了。DB保存済み。")
         
         search_button = main_elements.get("search_button")
         if search_button:
@@ -227,6 +195,7 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         
     finally:
         pythoncom.CoUninitialize()
+
 def run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry):
     # ... (変更なし) ...
     account_email = main_elements["account_entry"].get().strip()
@@ -480,7 +449,6 @@ def main():
         "settings_button": settings_button, 
         "reset_category_var": reset_category_var, 
     }
-    
     # ----------------------------------------------------
     # 📌 修正4: コールバック関数の定義 (main_elements 参照を安全化)
     # ----------------------------------------------------
@@ -490,27 +458,32 @@ def main():
             root, main_elements["account_entry"], main_elements["status_label"]
         )
     
+    # 📌 修正: extract_days_entry ではなく extract_days_var を渡す
     def run_extraction_callback():
-        run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry)
+        # ❌ 修正前 (ウィジェットを渡していた)
+        # run_extraction_thread(root, main_elements, read_mode_var, extract_days_entry) 
         
-    # 📌 修正8: 検索一覧ボタンのコールバック (sqlite3版)
+        # ✅ 修正後 (StringVar を渡す)
+        run_extraction_thread(root, main_elements, read_mode_var, extract_days_var)
     def open_search_callback():
+        # 1. データベースのパスを定義
         db_path = os.path.abspath(DATABASE_NAME)
         
+        # 2. データベースファイルが存在するかチェック
         if not os.path.exists(db_path):
-            messagebox.showwarning("警告", f"データベースファイル ('{DATABASE_NAME}') が見つかりません。\n先に抽出を実行してください。")
+            messagebox.showwarning("警告", f"データベース ('{DATABASE_NAME}') が見つかりません。\n先に抽出を実行してください。")
             return
             
         try:
+            # 3. メインウィンドウを非表示
             root.withdraw() 
             
-            # データベースから DataFrame を読み込む
+            # 4. データベースから DataFrame を読み込む (Excelではない)
             conn = sqlite3.connect(db_path)
             df_for_gui = pd.read_sql_query("SELECT * FROM emails", conn)
             conn.close()
 
-            # 📌 修正9: gui_search_window.py の __init__ に DataFrame を渡す
-            # (注意: gui_search_window.py 側の __init__ と _load_data も修正が必要です)
+            # 5. 検索ウィンドウ(Toplevel)に DataFrame を渡して起動
             search_app = gui_search_window.App(root, data_frame=df_for_gui) 
             search_app.wait_window()
             
@@ -518,6 +491,7 @@ def main():
             messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
             traceback.print_exc()
         finally:
+            # 6. 検索ウィンドウが閉じられたらメインウィンドウを復元
             try:
                 if root.winfo_exists():
                     root.deiconify()
