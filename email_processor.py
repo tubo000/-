@@ -16,7 +16,7 @@ import sqlite3
 # イニシャルを検出する正規表現を追加
 # ----------------------------------------------------------------------
 # 大文字2連続 (IR, KK) または 大文字,大文字 (K, K) または 名前(IR)
-INITIALS_REGEX = r'(\b[A-Z]{2}\b|\b[A-Z]\s*.\s*[A-Z]\b|名前\([A-Z]{2}\))'
+INITIALS_REGEX = r'(\b[A-Z]{2}\b|\b[A-Z]\s*,\s*[A-Z]\b|名前\([A-Z]{2}\))'
 # 外部定数と関数の依存関係を想定 (維持)
 try:
     from config import MUST_INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS, SCRIPT_DIR, OUTPUT_CSV_FILE as OUTPUT_FILENAME
@@ -84,8 +84,7 @@ def mark_email_as_processed(mail_item):
         return True
     return False
 
-# email_processor.py の remove_processed_category 関数のみを差し替え
-# (L125 付近)
+# email_processor.py (L125 付近の remove_processed_category 関数のみ差し替え)
 
 # ----------------------------------------------------------------------
 # 💡 処理済みカテゴリの解除 (Restrictエラー対策 + 降順ソート対応)
@@ -114,9 +113,6 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
         # 📌 修正: Restrict は日付のみで行う
         # (カテゴリ LIKE 検索は Restrict から除外)
         # ----------------------------------------------------
-        # category_filter_query = f"[Categories] LIKE '%{PROCESSED_CATEGORY_NAME}%'"
-        # filter_query_list.append(category_filter_query)
-
         if days_ago is not None:
             start_date_str = start_date_dt.strftime('%Y/%m/%d')
             filter_query_list.append(f"[ReceivedTime] < '{start_date_str}'")
@@ -129,13 +125,10 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
             else: # 日付指定がない場合は全件
                 items_to_reset = items
         except Exception as restrict_error:
-            # 💥 日付絞り込みも失敗する環境の場合
             print(f"警告: カテゴリ解除のRestrict(日付)に失敗しました: {restrict_error}")
             items_to_reset = items
 
-        # ----------------------------------------------------
-        # 📌 修正: 取得したアイテムを受信日時の降順 (新しい順) に並び替え
-        # ----------------------------------------------------
+        # 降順 (新しい順) に並び替え
         items_to_reset.Sort("[ReceivedTime]", True)
 
         item = items_to_reset.GetFirst()
@@ -456,6 +449,10 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
     df = pd.DataFrame(data_records)
     str_cols = [col for col in df.columns if col != '受信日時']
     df[str_cols] = df[str_cols].fillna('N/A').astype(str)
+    df['受信日時'] = pd.to_datetime(df['受信日時'], errors='coerce')# 📌 修正: 抽出後に DataFrame を受信日時の降順で並び替え
+    if not df.empty and '受信日時' in df.columns:
+        df = df.sort_values(by='受信日時', ascending=False).reset_index(drop=True)
+
     return df
 
 # ----------------------------------------------------------------------
