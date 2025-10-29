@@ -201,95 +201,120 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
 
 # email_processor.py の has_unprocessed_mail 関数のみを差し替え
 
-def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int =  14) -> int:
+# email_processor.py の has_unprocessed_mail 関数 (修正版)
+
+def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int = None) -> int:
     """
-    指定されたフォルダに、処理済みカテゴリがなく、
-    (1) 添付ファイルがある、または
-    (2) 本文/件名にキーワードやイニシャルが含まれる
-    メールの件数をカウントする。
-    
-    📌 修正 (ハイブリッドアプローチ):
-    カテゴリでの Restrict が失敗するため、
-    1. サーバー側で日付絞り込み (例: 過去90日) を行い (高速)
-    2. Python側でカテゴリをチェックする (安定的)
+    指定されたフォルダの未処理メール件数をカウントする。
+    days_to_check が指定されていれば、その日数で絞り込む。
     """
     unprocessed_count = 0
     if not folder_path or not target_email: return 0
 
+    valid_days_to_check = None
+    if days_to_check is not None:
+        try:
+            days_to_check_int = int(days_to_check)
+            if days_to_check_int >= 0:
+                valid_days_to_check = days_to_check_int
+            else:
+                 print(f"警告(has_unprocessed): 不正日数 {days_to_check}, 全期間チェック")
+        except (ValueError, TypeError):
+             print(f"警告(has_unprocessed): 日数 {days_to_check} が不正, 全期間チェック")
+
     try:
         pythoncom.CoInitialize()
-
         try:
             outlook = win32.GetActiveObject("Outlook.Application")
         except:
             outlook = win32.Dispatch("Outlook.Application")
-
         namespace = outlook.GetNamespace("MAPI")
         folder = get_outlook_folder(namespace, target_email, folder_path)
 
         if folder:
             items = folder.Items
 
-            # ----------------------------------------------------
-            # 🚀 ハイブリッドアプローチ: 1. サーバー側で日付絞り込み (高速)
-            # ----------------------------------------------------
-            try:
-                # 起動時のチェックは、直近90日間に限定する
-                cutoff_date_dt = (datetime.datetime.now() - timedelta(days=days_to_check))
-                cutoff_date_str = cutoff_date_dt.strftime('%Y/%m/%d')
-                date_filter = f"[ReceivedTime] >= '{cutoff_date_str}'"
-                
-                items = items.Restrict(date_filter)
-                print(f"DEBUG: has_unprocessed_mail: 過去{days_to_check}日間に絞り込み成功。")
-                
-            except Exception as restrict_error:
-                # 💥 日付絞り込みも失敗する環境の場合
-                print(f"警告: has_unprocessed_mailの日付絞り込みに失敗。全件スキャン (低速): {restrict_error}")
-                items = folder.Items # 失敗時は全件スキャン (安定だが遅い)
+            # --- 日付絞り込み (変更なし) ---
+            if valid_days_to_check is not None:
+                try:
+                    if valid_days_to_check == 0:
+                         cutoff_date_dt = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+                    else:
+                         cutoff_date_dt = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=valid_days_to_check)
+                    cutoff_date_str = cutoff_date_dt.strftime('%Y/%m/%d %H:%M')
+                    date_filter = f"[ReceivedTime] >= '{cutoff_date_str}'"
+                    items = items.Restrict(date_filter)
+                    # print(f"DEBUG(has_unprocessed): 過去{valid_days_to_check}日間に絞り込み。")
+                except Exception as restrict_error:
+                    print(f"警告(has_unprocessed): Restrict失敗。全件スキャン: {restrict_error}")
+                    items = folder.Items
+            # else:
+            #      print("DEBUG(has_unprocessed): 日付指定なし。全期間チェック。")
             
-            # ----------------------------------------------------
-            # 2. Python側でカテゴリ絞り込み (安定的)
-            # ----------------------------------------------------
+            # --- ソート (変更なし) ---
+            try: items.Sort("[ReceivedTime]", True)
+            except Exception as sort_error: print(f"警告(has_unprocessed): Sort失敗: {sort_error}")
+
+            # --- アイテムループ ---
             item = items.GetFirst()
             while item:
+                mail_entry_id_debug = 'UNKNOWN_ID' # エラー表示用
                 try:
+                    mail_entry_id_debug = getattr(item, 'EntryID', 'UNKNOWN_ID') # 早めにID取得試行
                     if item.Class == 43:
-                        # Python側でのフィルタリング (必須)
                         categories = str(getattr(item, 'Categories', ''))
                         if PROCESSED_CATEGORY_NAME not in categories:
+                            
+                            # ▼▼▼【ここを修正】添付ファイル関連処理を try...except で囲む ▼▼▼
+                            has_files = False
+                            has_initials_in_filename = False
+                            try:
+                                if item and hasattr(item, 'Attachments'):
+                                     attachments_collection = item.Attachments
+                                     attachment_count = attachments_collection.Count
+                                     if attachment_count > 0:
+                                         has_files = True
+                                         # ファイル名リストを取得してイニシャルチェック
+                                         attachment_names = [att.FileName for att in attachments_collection if hasattr(att, 'FileName')]
+                                         all_filenames_text = " ".join(attachment_names)
+                                         if re.search(INITIALS_REGEX, all_filenames_text):
+                                             has_initials_in_filename = True
+                            except (pythoncom.com_error, AttributeError, Exception) as attach_err:
+                                 # エラーが出ても警告表示にとどめ、has_files/has_initials は False のまま
+                                 print(f"警告(has_unprocessed): 添付ファイル情報/名前チェック中にエラー (ID: {mail_entry_id_debug}): {attach_err}")
+                            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
-                            has_attachments = hasattr(item, 'Attachments') and item.Attachments.Count > 0
-
-                            if has_attachments:
-                                unprocessed_count += 1
-                                item = items.GetNext() 
-                                continue
-
+                            # --- 必須キーワード・本文イニシャルチェック (変更なし) ---
                             subject = str(getattr(item, 'Subject', ''))
                             body = str(getattr(item, 'Body', ''))
                             full_search_text = subject + " " + body
-
                             must_include = any(re.search(kw, full_search_text, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
-                            has_initials = re.search(INITIALS_REGEX, full_search_text)
+                            has_initials_in_text = re.search(INITIALS_REGEX, full_search_text) 
 
-                            if must_include or has_initials:
+                            # --- 抽出対象判定 (has_files, has_initials_in_filename は安全に取得済み) ---
+                            is_target_for_count = must_include or has_initials_in_text or (has_files and has_initials_in_filename)
+
+                            if is_target_for_count:
                                 unprocessed_count += 1
-
+                                
+                except pythoncom.com_error as com_err:
+                     print(f"警告(has_unprocessed Loop): COMエラー (ID: {mail_entry_id_debug}): {com_err.hresult if hasattr(com_err, 'hresult') else 'N/A'}")
                 except Exception as e:
-                    print(f"警告: アイテムスキャン中にCOMエラー: {e}")
-
-                item = items.GetNext() 
+                    print(f"警告(has_unprocessed Loop): アイテム処理中にエラー (ID: {mail_entry_id_debug}): {e}")
+                
+                # --- 次のアイテムへ (変更なし) ---
+                try:
+                    item = items.GetNext()
+                except: 
+                    break
 
     except Exception as e:
-        print(f"警告: 未処理メールチェック中にCOMエラー発生: {e}")
-        unprocessed_count = 0
-
+        print(f"警告(has_unprocessed Main): チェック処理中にエラー発生: {e}")
+        unprocessed_count = 0 # エラー時は0を返す
     finally:
         pythoncom.CoUninitialize()
-
+        
     return unprocessed_count
-
-
 # ----------------------------------------------------------------------
 # 💡 メイン抽出関数: Outlookからメールを取得 (高精度ロジック + 高速Restrict)
 # ----------------------------------------------------------------------
@@ -299,300 +324,244 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
 def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: str, read_mode: str = "all", days_ago: int = None) -> pd.DataFrame:
     """
     Outlookからメールデータを抽出する。read_modeに基づいてフィルタリングを行う。
+    days_ago=0 の場合は今日受信したメールのみを対象とする。
     """
     data_records = []
     temp_dir = os.path.join(SCRIPT_DIR, "temp_attachments_safe")
     os.makedirs(temp_dir, exist_ok=True)
-
     previous_attachment_content = _load_previous_attachment_content()
     
     start_date_dt = None 
     if days_ago is not None:
-        start_date_dt = (datetime.datetime.now() - timedelta(days=days_ago))
-
+        try:
+             days_ago = int(days_ago) 
+             if days_ago < 0: raise ValueError("日数は0以上の整数である必要があります")
+             if days_ago == 0:
+                 today_date = datetime.date.today()
+                 start_date_dt = datetime.datetime.combine(today_date, datetime.time.min) 
+             else:
+                 start_date_dt = datetime.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=days_ago)
+        except ValueError as e:
+             print(f"警告: 不正な日数 '{days_ago}' が指定されました。全期間を対象とします。エラー: {e}")
+             days_ago = None 
+             start_date_dt = None
+             
     try:
         pythoncom.CoInitialize()
-
         try:
             outlook_app = win32.GetActiveObject("Outlook.Application")
         except:
             outlook_app = win32.Dispatch("Outlook.Application")
-
         outlook_ns = outlook_app.GetNamespace("MAPI")
         target_folder = get_outlook_folder(outlook_ns, account_name, target_folder_path)
-
-        if target_folder is None:
-            raise RuntimeError(f"指定されたフォルダパス '{target_folder_path}' が見つかりませんでした。")
+        if target_folder is None: raise RuntimeError(f"指定フォルダ '{target_folder_path}' が見つかりません。")
 
         items = target_folder.Items
 
         filter_query_list = []
-
-        if days_ago is not None:
-            start_date_str = start_date_dt.strftime('%Y/%m/%d')
+        if start_date_dt is not None:
+            start_date_str = start_date_dt.strftime('%Y/%m/%d %H:%M') 
             filter_query_list.append(f"[ReceivedTime] >= '{start_date_str}'")
-
 
         if filter_query_list:
             query_string = " AND ".join(filter_query_list)
             try:
                 items = items.Restrict(query_string)
             except Exception as restrict_error:
-                print(f"警告: Outlookの絞り込み(Restrict)に失敗しました: {restrict_error}")
+                print(f"警告: Outlook Restrict失敗: {restrict_error}")
                 items = target_folder.Items
                 
-        # 降順ソートを追加 (items.Restrict の後、または items = target_folder.Items の後)
         try:
             items.Sort("[ReceivedTime]", True)
-            print("DEBUG: Outlookアイテムを降順でソートしました。")
         except Exception as sort_error:
-             print(f"警告: Outlookアイテムのソートに失敗しました: {sort_error}")
-             # ソート失敗時はそのまま続行するが、順序は保証されない
+             print(f"警告: Outlook Sort失敗: {sort_error}")
 
         item = items.GetFirst()
         while item:
-
             is_processed = False
             mail_entry_id = 'UNKNOWN'
-            mail_item = None
+            mail_item = None # ループごとに初期化
 
             if item.Class == 43: # olMailItem
-
                 extraction_succeeded = False
-
                 try:
-                    mail_item = item
+                    mail_item = item # mail_item に現在のアイテムを代入
+                    mail_entry_id = str(getattr(mail_item, 'EntryID', 'UNKNOWN')) # 早めにID取得を試みる
 
-                    is_processed = False
-                    mail_entry_id = str(getattr(mail_item, 'EntryID', 'UNKNOWN'))
+                    # --- カテゴリチェック ---
+                    current_categories = getattr(mail_item, 'Categories', '') # エラーが出にくい getattr を使用
+                    if PROCESSED_CATEGORY_NAME in current_categories:
+                        is_processed = True
 
-                    if hasattr(item, 'Categories'):
-                        current_categories = str(getattr(item, 'Categories', ''))
-                        if PROCESSED_CATEGORY_NAME in current_categories:
-                            is_processed = True
-
+                    # --- モード/日付チェック ---
                     if read_mode == "unprocessed" and is_processed:
-                        item = items.GetNext()
-                        continue
-                    
-                    if days_ago is not None:
+                        # item = items.GetNext() # ループ末尾で実行
+                        continue 
+                    if start_date_dt is not None: 
                          received_time_check = getattr(mail_item, 'ReceivedTime', datetime.datetime.now())
                          if received_time_check.tzinfo is not None:
                              received_time_check = received_time_check.replace(tzinfo=None)
-                         if received_time_check < start_date_dt:
-                             item = items.GetNext()
+                         if received_time_check < start_date_dt: 
+                             # item = items.GetNext() # ループ末尾で実行
                              continue
 
+                    # --- 基本情報取得 ---
                     subject = str(getattr(mail_item, 'Subject', ''))
                     body = str(getattr(mail_item, 'Body', ''))
-                    received_time = getattr(mail_item, 'ReceivedTime', datetime.datetime.now())
-
+                    received_time = getattr(mail_item, 'ReceivedTime', datetime.datetime.now()) # 再取得 (整形のため)
                     if received_time is not None and received_time.tzinfo is not None:
                         received_time = received_time.replace(tzinfo=None)
                     elif received_time is None:
                         received_time = datetime.datetime.now().replace(tzinfo=None)
 
+                    # --- 添付ファイルチェック (has_files) ---
                     attachments_text = ""
                     attachment_names = []
-                    has_files = hasattr(mail_item, 'Attachments') and mail_item.Attachments.Count > 0
+                    has_files = False # デフォルト False
+                    
+                    # ▼▼▼【ここを再修正】hasattr も try の中に入れる ▼▼▼
+                    try:
+                        # mail_item が有効か再確認
+                        if mail_item and hasattr(mail_item, 'Attachments'):
+                             # Attachments および Count へのアクセスを try 内で行う
+                             attachments_collection = mail_item.Attachments # 変数に入れる
+                             attachment_count = attachments_collection.Count 
+                             if attachment_count > 0:
+                                 has_files = True
+                                 # 念のためファイル名リストもここで取得しておく
+                                 attachment_names = [att.FileName for att in attachments_collection if hasattr(att, 'FileName')]
+                                 
+                    except pythoncom.com_error as com_err:
+                         print(f"警告(has_files): 添付情報取得中にCOMエラー (ID: {mail_entry_id}): {com_err.hresult if hasattr(com_err, 'hresult') else 'N/A'}")
+                    except AttributeError as ae:
+                         print(f"警告(has_files): 添付情報取得中にAttributeError (ID: {mail_entry_id}): {ae}")
+                    except Exception as e:
+                         print(f"警告(has_files): 添付情報取得中に予期せぬエラー (ID: {mail_entry_id}): {e}")
+                    # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
+                    # --- 添付ファイル内容抽出 (has_files が True の場合のみ) ---
                     if has_files:
-                        attachment_names = [att.FileName for att in mail_item.Attachments if hasattr(att, 'FileName')] # FileNameがない場合を考慮
-
                         if is_processed and mail_entry_id in previous_attachment_content:
                             attachments_text = str(previous_attachment_content.get(mail_entry_id, ""))
                         else:
-                            for attachment in mail_item.Attachments:
-                                # ファイル名がない添付ファイルはスキップ
-                                if not hasattr(attachment, 'FileName'):
-                                     print(f"警告: ファイル名のない添付ファイルをスキップ (EntryID: {mail_entry_id})")
-                                     continue
-                                     
+                            # attachment_names は上で取得済み
+                            for attachment in attachments_collection: # 上で取得したコレクションを使用
+                                if not hasattr(attachment, 'FileName'): continue
                                 safe_filename = re.sub(r'[\\/:*?"<>|]', '_', attachment.FileName)
-                                # ファイル名が長すぎる場合や特殊文字が含まれる場合の対策を追加しても良い
-                                if len(safe_filename) > 150: # 例: 150文字に制限
+                                if len(safe_filename) > 150:
                                      name, ext = os.path.splitext(safe_filename)
                                      safe_filename = name[:150-len(ext)] + ext
-                                     
                                 temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}_{safe_filename}")
                                 try:
                                     attachment.SaveAsFile(temp_file_path)
-                                    # get_attachment_text に渡すファイル名を元の名前に
                                     extracted_content = get_attachment_text(temp_file_path, attachment.FileName) 
                                     attachments_text += f"\n--- FILE: {attachment.FileName} ---\n{str(extracted_content)}\n"
                                 except pythoncom.com_error as com_err:
-                                     # COMエラー (例: ファイルアクセス権限、Outlookの状態など)
-                                     print(f"エラー: 添付ファイルの保存/読み込み中にCOMエラー (ファイル: {attachment.FileName}, EntryID: {mail_entry_id}): {com_err}")
-                                     attachments_text += f"\n--- ERROR reading {attachment.FileName}: COM Error {com_err.hresult if hasattr(com_err, 'hresult') else ''} ---\n"
+                                     print(f"エラー(Attach Save/Read): COMエラー (File: {attachment.FileName}, ID: {mail_entry_id}): {com_err}")
+                                     attachments_text += f"\n--- ERROR reading {attachment.FileName}: COM Error ---\n"
                                 except Exception as file_ex:
-                                    # その他のファイル処理エラー
-                                    print(f"エラー: 添付ファイルの保存/読み込み中にエラー (ファイル: {attachment.FileName}, EntryID: {mail_entry_id}): {file_ex}")
+                                    print(f"エラー(Attach Save/Read): 例外 (File: {attachment.FileName}, ID: {mail_entry_id}): {file_ex}")
                                     attachments_text += f"\n--- ERROR reading {attachment.FileName}: {file_ex} ---\n"
                                 finally:
                                     if os.path.exists(temp_file_path):
-                                        try:
-                                            os.remove(temp_file_path)
-                                        except OSError as oe:
-                                             print(f"警告: 一時ファイル削除失敗: {oe}")
+                                        try: os.remove(temp_file_path)
+                                        except OSError as oe: print(f"警告: 一時ファイル削除失敗: {oe}")
                             attachments_text = attachments_text.strip()
 
-                    # --- キーワード検索 (件名, 本文, 添付ファイル内容) ---
+                    # --- キーワード・イニシャル・除外チェック ---
                     body_subject_search_text = str(subject) + " " + str(body)
                     search_text_for_keywords = body_subject_search_text + " " + attachments_text
                     has_must_include_keyword = any(re.search(kw, search_text_for_keywords, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
-
-                    # --- 📌 修正: イニシャル検索 (添付ファイル名のみ) ---
+                    
                     has_initials_in_filename = False
-                    if has_files:
+                    if has_files: # attachment_names は上で取得済み
                         all_filenames_text = " ".join(attachment_names)
                         if re.search(INITIALS_REGEX, all_filenames_text):
                              has_initials_in_filename = True
-                             print(f"DEBUG: 添付ファイル名にイニシャルを検出 (EntryID: {mail_entry_id}, Filenames: {all_filenames_text})")
 
-                    # --- 除外キーワードチェック ---
                     full_search_text = body_subject_search_text + " " + attachments_text
-                    
-                    # ▼▼▼ デバッグ print 追加 ▼▼▼
-                    print(f"\n--- DEBUG: 除外チェック開始 (EntryID: {mail_entry_id}, 件名: {subject[:50]}...) ---")
-                    # print(f"DEBUG: 検索対象テキスト (一部): {full_search_text[:200]}...") # 必要ならコメント解除
                     is_excluded = False
-                    matched_exclude_keyword = None
                     for kw in EXCLUDE_KEYWORDS:
-                        match_obj = re.search(kw, full_search_text, re.IGNORECASE)
-                        if match_obj:
+                        if re.search(kw, full_search_text, re.IGNORECASE):
                             is_excluded = True
-                            matched_exclude_keyword = kw
-                            print(f"DEBUG: ★★★ 除外キーワードにマッチ！ ★★★ -> '{kw}'")
                             break
-                    print(f"DEBUG: is_excluded 判定結果: {is_excluded}")
-                    # ▲▲▲ デバッグ print 追加ここまで ▲▲▲
-
+                            
                     if is_excluded:
-                         print(f"DEBUG: is_excluded=True なので、このメールをスキップします。")
-                         if not is_processed:
-                             mark_email_as_processed(mail_item)
-                         item = items.GetNext()
-                         continue
+                         if not is_processed: mark_email_as_processed(mail_item)
+                         continue 
 
-                    # --- 📌 修正: 抽出対象 (is_target) の条件を変更 ---
+                    # --- 抽出対象判定 ---
                     is_target = has_must_include_keyword or (has_files and has_initials_in_filename)
 
-                    # ▼▼▼ デバッグ用: is_target の判定理由を表示 ▼▼▼
+                    # --- 抽出 & マーク付け ---
                     if is_target:
-                         reason = []
-                         if has_must_include_keyword: reason.append("必須キーワードあり")
-                         if has_files and has_initials_in_filename: reason.append("添付ファイル名にイニシャルあり")
-                         print(f"DEBUG: 抽出対象と判定 (EntryID: {mail_entry_id}), 理由: {', '.join(reason)}")
-                    else: # 抽出対象外の場合も理由を表示
-                         reason = []
-                         if not has_must_include_keyword: reason.append("必須キーワードなし")
-                         if not has_files: reason.append("添付ファイルなし")
-                         elif not has_initials_in_filename: reason.append("添付ファイル名にイニシャルなし")
-                         print(f"DEBUG: 抽出対象外 (EntryID: {mail_entry_id}), 理由: {', '.join(reason)}")
-                    # ▲▲▲ デバッグ用ここまで ▲▲▲
+                        record = {
+                            'EntryID': mail_entry_id, '件名': subject, '受信日時': received_time,
+                            '本文(テキスト形式)': body, '本文(ファイル含む)': attachments_text,
+                            'Attachments': ", ".join(attachment_names),
+                        }
+                        data_records.append(record)
+                        extraction_succeeded = True 
+                        if not is_processed:
+                            # 後続のマーク付け処理へ
+                             pass 
+                             
+                    elif not is_target: 
+                        if not is_processed: mark_email_as_processed(mail_item) 
+                        continue 
 
-                    # --- 抽出 & マーク付け (変更なし) ---
-                    if is_target and not is_processed:
-                        # 抽出してマーク
-                        pass 
-                    elif is_target and is_processed:
-                        # 抽出のみ
-                        pass 
-                    elif not is_target and not is_processed:
-                        # マークのみしてスキップ
-                        mark_email_as_processed(mail_item) 
-                        item = items.GetNext()
-                        continue
-                    elif not is_target and is_processed:
-                        # 何もせずスキップ
-                        item = items.GetNext() 
-                        continue
-
-                    # レコードの準備 (抽出対象の場合のみ)
-                    record = {
-                        'EntryID': mail_entry_id,
-                        '件名': subject,
-                        '受信日時': received_time,
-                        '本文(テキスト形式)': body,
-                        '本文(ファイル含む)': attachments_text,
-                        'Attachments': ", ".join(attachment_names),
-                    }
-                    data_records.append(record)
-                    extraction_succeeded = True
-
+                # --- アイテム処理中の包括的なエラーハンドリング ---
                 except pythoncom.com_error as com_err:
-                    # メールアイテムへのアクセス自体でCOMエラーが発生した場合
-                    print(f"警告: メールアイテム処理中にCOMエラーが発生しました (EntryID: {mail_entry_id}). スキップします。エラーコード: {com_err.hresult if hasattr(com_err, 'hresult') else 'N/A'}")
-                    # このアイテムは処理できないので、次のアイテムへ進む
-                    # マーク付けは試みない（アイテムにアクセスできない可能性があるため）
-                    item = items.GetNext()
-                    continue
+                    print(f"警告(Item Loop): COMエラー (ID: {mail_entry_id}): {com_err.hresult if hasattr(com_err, 'hresult') else 'N/A'}")
+                    # このアイテムはスキップ (GetNextはfinallyの外)
+                except AttributeError as ae:
+                     # 特定の属性アクセスでエラーが出た場合
+                     print(f"警告(Item Loop): AttributeError (ID: {mail_entry_id}): {ae}")
                 except Exception as item_ex:
-                    # その他の予期せぬエラー
-                    print(f"警告: メールアイテムの処理中に予期せぬエラーが発生しました (EntryID: {mail_entry_id}). スキップします。エラー: {item_ex}\n{traceback.format_exc(limit=1)}") # トレースバックも少し表示
+                    print(f"警告(Item Loop): 予期せぬエラー (ID: {mail_entry_id}): {item_ex}\n{traceback.format_exc(limit=1)}")
+                    # エラーが出ても、未処理ならマーク付けを試みる (mail_itemがNoneでない場合)
                     if mail_item and not is_processed:
-                        try:
-                            # エラーが発生しても、可能ならマーク付けを試みる
-                            mark_email_as_processed(mail_item)
-                        except Exception as mark_e:
-                            print(f"  警告: エラー発生後のマーク付けにも失敗しました: {mark_e}")
-                    # 次のアイテムへ
-                    item = items.GetNext()
-                    continue
-
-                # 抽出成功 かつ 未処理だった場合 -> マーク付け
-                if extraction_succeeded and not is_processed:
-                    try:
-                        mark_email_as_processed(mail_item)
-                    except Exception as mark_e:
-                         print(f"警告: 抽出成功後のマーク付けに失敗 (EntryID: {mail_entry_id}): {mark_e}")
-
-
-            # ループの最後に次のアイテムを取得 (try...except の外)
+                        try: mark_email_as_processed(mail_item)
+                        except Exception as mark_e: print(f"  警告: エラー後のマーク付け失敗: {mark_e}")
+                # ★ try ブロックの最後 (エラーがあってもなくても実行されるべき処理)
+                finally:
+                      # 抽出成功 かつ 未処理だった場合 -> マーク付け
+                      if extraction_succeeded and not is_processed:
+                          try:
+                              mark_email_as_processed(mail_item)
+                          except Exception as mark_e:
+                               print(f"警告: 抽出成功後のマーク付け失敗 (ID: {mail_entry_id}): {mark_e}")
+                               
+            # --- ループの最後に必ず次のアイテムを取得 ---
             try:
-                item = items.GetNext()
+                item = items.GetNext() 
             except pythoncom.com_error as next_err:
-                 print(f"警告: GetNext() でCOMエラーが発生しました。ループを中断します。エラーコード: {next_err.hresult if hasattr(next_err, 'hresult') else 'N/A'}")
-                 break # ループ中断
+                 print(f"警告: GetNext() COMエラー。ループ中断。Code: {next_err.hresult if hasattr(next_err, 'hresult') else 'N/A'}")
+                 break 
             except Exception as next_ex:
-                 print(f"警告: GetNext() で予期せぬエラーが発生しました。ループを中断します。エラー: {next_ex}")
-                 break # ループ中断
-
+                 print(f"警告: GetNext() 予期せぬエラー。ループ中断。エラー: {next_ex}")
+                 break 
 
     except pythoncom.com_error as com_outer_err:
-         # Outlookとの接続など、ループ外でのCOMエラー
-         raise RuntimeError(f"Outlook操作エラー (COM): {com_outer_err}\n詳細: {traceback.format_exc()}")
+         raise RuntimeError(f"Outlook操作エラー (COM): {com_outer_err}\n{traceback.format_exc()}")
     except Exception as e:
-        # その他の予期せぬエラー
-        raise RuntimeError(f"Outlook操作エラー: {e}\n詳細: {traceback.format_exc()}")
+        raise RuntimeError(f"Outlook操作エラー: {e}\n{traceback.format_exc()}")
     finally:
-        # 一時フォルダのクリーンアップ
         if os.path.exists(temp_dir):
              try:
-                 # 中身があれば削除
-                 # for f in os.listdir(temp_dir):
-                 #     os.remove(os.path.join(temp_dir, f))
-                 # os.rmdir(temp_dir) # フォルダ自体を削除
-                 # 中身が空なら削除（より安全）
-                 if not os.listdir(temp_dir):
-                     os.rmdir(temp_dir)
-             except OSError as oe:
-                  print(f"警告: 一時フォルダのクリーンアップ失敗: {oe}")
-        # COMライブラリの後処理
+                 if not os.listdir(temp_dir): os.rmdir(temp_dir)
+             except OSError as oe: print(f"警告: 一時フォルダクリーンアップ失敗: {oe}")
         pythoncom.CoUninitialize()
 
     df = pd.DataFrame(data_records)
-    # データ型の整理
     if not df.empty:
         str_cols = [col for col in df.columns if col != '受信日時']
         df[str_cols] = df[str_cols].fillna('N/A').astype(str)
         df['受信日時'] = pd.to_datetime(df['受信日時'], errors='coerce')
-        # 抽出後に DataFrame を受信日時の降順で並び替え (変更なし)
         if '受信日時' in df.columns:
             df = df.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
 
     return df
-
 # ----------------------------------------------------------------------
 # 💡 外部公開関数
 # ----------------------------------------------------------------------

@@ -328,39 +328,39 @@ def actual_run_file_deletion_logic(main_elements):
     # ----------------------------------------------------
 
     # --- カテゴリマークのリセット (DB削除が成功した場合のみ実行) ---
-    # main_application.py の actual_run_file_deletion_logic 関数内 (L330 付近)
-
-    # --- カテゴリマークのリセット (DB削除が成功した場合のみ実行) ---
     reset_count = 0
     if reset_category_flag:
         status_label.config(text=f"状態: Outlookカテゴリ解除中...")
         root.update_idletasks()
         try:
-            # 📌 修正: days_ago=0 の場合でも None を渡して全期間解除を実行する
+            # days_ago=0 の場合は None を渡して全期間のカテゴリ解除をするか、
+            # days_ago > 0 の時だけ実行するかを決定する必要があります。
+            # ここでは days_ago > 0 の時だけ解除するようにします（安全策）。
             reset_days = days_ago if days_ago > 0 else None 
-            # 📌 削除: if reset_days is not None: のチェックを削除
-            # if reset_days is not None: 
-            reset_count = remove_processed_category(
-                main_elements["account_entry"].get().strip(), 
-                main_elements["folder_entry"].get().strip(), 
-                days_ago=reset_days # days_ago=0 のときは None が渡される
-            )
-            # else:
-            #     print("INFO: days_ago=0 のため、Outlookカテゴリの解除はスキップされました。") # この行も削除
+            if reset_days is not None: # days_ago=0 (全削除) の場合はカテゴリ解除しない
+                reset_count = remove_processed_category(
+                    main_elements["account_entry"].get().strip(), 
+                    main_elements["folder_entry"].get().strip(), 
+                    days_ago=reset_days 
+                )
+            else:
+                 print("INFO: days_ago=0 のため、Outlookカテゴリの解除はスキップされました。")
 
         except Exception as e:
+             # DB削除は成功しているので、カテゴリ解除のエラーのみ報告
              messagebox.showerror("カテゴリ解除エラー", f"Outlookカテゴリの解除中にエラーが発生しました。\nDBレコードの削除は完了しています。\n詳細: {e}")
              status_label.config(text="状態: DB削除完了、カテゴリ解除エラー。")
+             # ここで return せず、DB削除成功のメッセージは表示する
              # return # カテゴリ解除エラーでもDB削除は完了している
 
     # --- 最終結果メッセージ ---
     final_msg = delete_result_message # DB削除結果
     if reset_category_flag:
-        # 📌 修正: days_ago=0 でもメッセージを表示
-        # if reset_days is not None:
-        final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
-        # else:
-        #     final_msg += "\n(Outlookカテゴリの解除はスキップされました)" # この行も削除
+        # days_ago=0 でスキップした場合も考慮
+        if reset_days is not None:
+             final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
+        else:
+             final_msg += "\n(Outlookカテゴリの解除はスキップされました)"
         
     messagebox.showinfo("処理完了", final_msg)
     status_label.config(text="状態: 削除処理完了。")
