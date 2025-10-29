@@ -4,7 +4,7 @@
 import os
 import sys
 import re
-
+import win32com.client as win32 # この import がなければ追加
 # =================================================================
 # 【定数定義と設定】
 # =================================================================
@@ -152,3 +152,36 @@ PROCESS_KEYWORDS = {
     #'運用・保守': [r'運用', r'保守', r'メンテナンス'],
     #'その他': [r'キックオフ', r'リリース', '管理'],
 }
+def get_outlook_folder(outlook_ns, account_name, folder_path):
+    """
+    指定されたアカウント名とフォルダパスからOutlookフォルダオブジェクトを取得する。
+    フォルダパスは '/' 区切りで指定する (例: '受信トレイ/サブフォルダ')。
+    """
+    try:
+        # まずアカウント名のフォルダを取得
+        account_folder = outlook_ns.Folders[account_name]
+        
+        # フォルダパスを '/' で分割し、空の部分を除去
+        folder_parts = [part for part in folder_path.split('/') if part]
+        
+        # 最上位のフォルダから順にたどる
+        target_folder = account_folder
+        for part in folder_parts:
+            # 大文字小文字を区別しない場合があるため、存在するフォルダ名で取得しなおす方が安全な場合も
+            # found = False
+            # for f in target_folder.Folders:
+            #     if f.Name.lower() == part.lower():
+            #         target_folder = f
+            #         found = True
+            #         break
+            # if not found:
+            #     raise Exception(f"サブフォルダ '{part}' が見つかりません。")
+            # よりシンプルに直接アクセスを試みる
+             target_folder = target_folder.Folders[part]
+
+        return target_folder
+        
+    except Exception as e:
+        # フォルダが見つからない場合などは None を返す
+        print(f"エラー: Outlookフォルダ '{account_name}/{folder_path}' の取得に失敗しました: {e}")
+        return None

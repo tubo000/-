@@ -16,28 +16,63 @@ import sqlite3
 # イニシャルを検出する正規表現を追加
 # ----------------------------------------------------------------------
 # 大文字2連続 (IR, KK) または 大文字,大文字 (K, K) または 名前(IR)
-INITIALS_REGEX = r'(\b[A-Z]{2}\b|\b[A-Z]\s*,\s*[A-Z]\b|名前\([A-Z]{2}\))'
-# 外部定数と関数の依存関係を想定 (維持)
+INITIALS_REGEX = r'(\b[A-Z]{2}\b|\b[A-Z]\s*.\s*[A-Z]\b|名前\([A-Z]{2}\))'
+# --- 📌 修正ここから ---
+
+# 1. get_attachment_text のデフォルト（代替）定義
+def get_attachment_text(*args, **kwargs):
+    print("警告: file_processor.py から get_attachment_text を読み込めませんでした。")
+    return "ATTACHMENT_CONTENT_IMPORT_FAILED"
+
+# 2. get_outlook_folder のデフォルト（代替）定義
+def get_outlook_folder(outlook_ns, account_name, folder_path):
+     print(f"警告: config.py から get_outlook_folder を読み込めませんでした。デフォルト処理を使用します。")
+     # デフォルトの挙動（もしあれば記述、なければ None を返す）
+     # 例: 標準的なフォルダ構造を探すなど。ここでは None を返す
+     try:
+          # デフォルトのフォルダを探す試み (例)
+          return outlook_ns.Folders[account_name].Folders[folder_path]
+     except Exception:
+          print(f"エラー: デフォルトのフォルダ取得も失敗しました: {account_name}/{folder_path}")
+          return None # 失敗したら None
+
+# 3. config.py から設定値と関数を読み込む
 try:
     from config import MUST_INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS, SCRIPT_DIR, OUTPUT_CSV_FILE as OUTPUT_FILENAME
-    def get_outlook_folder(outlook_ns, account_name, folder_path):
-        """Outlookフォルダオブジェクトを取得する（実装は outlook_api.py にあるものと仮定）"""
-        try:
-            return outlook_ns.Folders[account_name].Folders[folder_path]
-        except Exception:
-            return None
+    
+    # ▼▼▼ 修正点 ▼▼▼
+    # get_outlook_folder を config から明示的にインポート
     try:
-        from file_processor import get_attachment_text
+        from config import get_outlook_folder as real_get_outlook_folder
+        get_outlook_folder = real_get_outlook_folder # インポート成功、デフォルト関数を上書き
+        print("INFO: config.py から get_outlook_folder を読み込みました。")
     except ImportError:
-        def get_attachment_text(*args, **kwargs): return "ATTACHMENT_CONTENT_FILE_IO_FAILED"
+        print("警告: config.py に get_outlook_folder が定義されていません。デフォルト処理を使用します。")
+        # デフォルト関数がそのまま使われる
+    # ▲▲▲▲▲▲▲▲▲▲
+        
+    print("INFO: config.py から設定値を読み込みました。")
 
 except ImportError:
+    # config.py 自体が見つからない場合
+    print("警告: config.py が見つからないかインポートできませんでした。デフォルト設定を使用します。")
     MUST_INCLUDE_KEYWORDS = [r'スキルシート']
     EXCLUDE_KEYWORDS = [r'案\s*件\s*名',r'案\s*件\s*番\s*号',r'案\s*件:',r'案\s*件：',r'【案\s*件】',r'概\s*要',r'必\s*須']
     SCRIPT_DIR = os.getcwd()
-    def get_outlook_folder(*args, **kwargs): return None
-    def get_attachment_text(*args, **kwargs): return "ATTACHMENT_CONTENT_FILE_IO_FAILED"
+    OUTPUT_FILENAME = 'output_extraction.xlsx'
+    # get_outlook_folder は上で定義したデフォルトが使われる
 
+# 4. file_processor.py から関数を読み込む (変更なし)
+try:
+    from file_processor import get_attachment_text as real_get_attachment_text
+    get_attachment_text = real_get_attachment_text
+    print("INFO: file_processor.py から get_attachment_text を読み込みました。")
+except ImportError:
+    print("警告: file_processor.py が見つからないか 'get_attachment_text' が含まれていません。")
+except Exception as e:
+    print(f"エラー: file_processor.py のインポート中にエラー: {e}")
+
+# --- 📌 修正ここまで ---
 # 保存先を .db ファイルに変更
 DATABASE_NAME = 'extraction_cache.db'
 PROCESSED_CATEGORY_NAME = "スキルシート処理済"
