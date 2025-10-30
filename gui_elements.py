@@ -40,7 +40,8 @@ def open_settings_window(root, account_entry_main, status_label_main):
         success, message = utils.save_config_csv(new_account)
         if success:
             account_entry_main.delete(0, tk.END); account_entry_main.insert(0, new_account)
-            status_label_main.config(text=f" 設定: アカウント名が '{new_account}' に更新されました。", fg="purple")
+            # ▼▼▼ 修正: 'fg="purple"' の指定を削除 ▼▼▼
+            status_label_main.config(text=f" 設定: アカウント名が '{new_account}' に更新されました。")
             messagebox.showinfo("保存完了", message); settings_window.destroy()
         else:
             messagebox.showerror("保存エラー", message)

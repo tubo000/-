@@ -1,4 +1,4 @@
-# main_application.py (COM初期化 + チェッカー追加版)
+# main_application.py (「0日」指定対応 + COM初期化修正 + チェッカー)
 import os
 import sys
 import pandas as pd
@@ -78,7 +78,7 @@ def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df.reindex(columns=fixed_leading_cols + remaining_cols, fill_value='N/A')
 
 # ----------------------------------------------------
-# 抽出処理ロジック (COM初期化は維持 + チェッカー)
+# 抽出処理ロジック (COM初期化は維持 + チェッカー + 0日対応)
 # ----------------------------------------------------
 def actual_run_extraction_logic(root, main_elements, target_email, folder_path, read_mode, read_days, status_label):
     
@@ -99,17 +99,22 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         if read_days.strip():
             try:
                 days_ago = int(read_days)
-                # ▼▼▼【注意】このコードでは 0 はエラーになる ▼▼▼
-                if days_ago < 1: raise ValueError("日数は1以上の整数を指定してください。")
+                # ▼▼▼【修正】0 を許可する ▼▼▼
+                if days_ago < 0: 
+                    raise ValueError("日数は0以上の整数である必要があります")
             except ValueError:
-                messagebox.showerror("入力エラー", "期間指定は1以上の整数で指定してください。")
+                # ▼▼▼【修正】エラーメッセージを「0以上」に ▼▼▼
+                messagebox.showerror("入力エラー", "期間指定は **0以上** の整数で指定してください。\n(空欄の場合は全期間)")
                 status_label.config(text="状態: 抽出失敗 (期間入力不正)。")
                 return # finally が実行される
 
-        if days_ago is not None:
-            mode_text = f"未処理 (過去{days_ago}日)"
+        # ▼▼▼【修正】0日の場合のモードテキストを追加 ▼▼▼
+        if days_ago == 0:
+             mode_text = "未処理 (今日のみ)"
+        elif days_ago is not None and days_ago > 0 :
+             mode_text = f"未処理 (過去{days_ago}日)"
         else:
-            mode_text = "未処理 (全期間)"
+             mode_text = "未処理 (全期間)"
             
         status_label.config(text=f"状態: {target_email} アカウントからメール取得中 ({mode_text})...")
         root.update_idletasks() 
@@ -276,7 +281,11 @@ def run_deletion_thread(root, main_elements):
 # 💡 【最終版】 レコード削除関数 (SQLite専用)
 # ----------------------------------------------------------------------
 def delete_processed_records(days_ago: int, db_path: str) -> str:
-    # ... (この関数は変更なし、main_application.py 内に定義されている前提) ...
+    """
+    指定された日数に基づき、SQLiteデータベース内の古いレコードを削除する。
+    0: すべてのレコードを削除。
+    1以上: N日前より古いレコードを削除（N日前の0時0分より前）。
+    """
     try:
         days_ago = int(days_ago)
         if days_ago < 0:
@@ -323,11 +332,10 @@ def delete_processed_records(days_ago: int, db_path: str) -> str:
         if conn: conn.close()
 
 # ----------------------------------------------------
-# 削除スレッド本体 (COM初期化追加 + チェッカー)
+# 削除スレッド本体 (COM初期化追加 + チェッカー + 0日対応)
 # ----------------------------------------------------
 def actual_run_file_deletion_logic(main_elements):
     
-    # --- ▼▼▼【COM初期化 追加】▼▼▼ ---
     thread_id = threading.get_ident()
     print(f"\n[CHECKER] Thread {thread_id} (Deletion) STARTING...")
     try:
@@ -336,9 +344,8 @@ def actual_run_file_deletion_logic(main_elements):
     except Exception as e:
         print(f"[CHECKER] Thread {thread_id} (Deletion) CoInitialize() FAILED: {e}")
         pass
-    # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
     
-    try: # メインのロジックを try で囲み、finally で CoUninitialize する
+    try:
         days_entry = main_elements["delete_days_entry"] 
         status_label = main_elements["status_label"]
         reset_category_var = main_elements["reset_category_var"]
@@ -347,23 +354,24 @@ def actual_run_file_deletion_logic(main_elements):
 
         try:
             days_ago = int(days_input)
-            # ▼▼▼【注意】このコードでは 0 はエラーになる ▼▼▼
-            if days_ago < 1: 
-                raise ValueError("日数は1以上の整数を指定してください。")
+            # ▼▼▼【修正】0 を許可する ▼▼▼
+            if days_ago < 0: 
+                raise ValueError("日数は0以上の整数を指定してください。")
         except ValueError as e:
-            # ▼▼▼【注意】エラーメッセージも「1以上」のまま ▼▼▼
-            messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}\n(1以上の整数で指定)")
+            # ▼▼▼【修正】エラーメッセージを「0以上」に ▼▼▼
+            messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}\n(0以上の整数で指定)")
             status_label.config(text="状態: 削除失敗 (入力不正)。")
             return # finally が実行される
 
         reset_category_flag = reset_category_var.get()
 
-        if days_ago == 0: # この条件は通らない
+        if days_ago == 0:
              confirm_prompt = f"🚨 **警告:** データベース内の**すべてのレコード**を削除します。\n"
         else:
              confirm_prompt = f"🚨 **警告:** データベース内の **{days_ago}日より古いレコード**を削除します。\n"
         if reset_category_flag:
-            if days_ago == 0: pass # 通らない
+            if days_ago == 0:
+                 confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークを**すべて解除**します。\n\n**本当に実行しますか？**"
             else:
                  confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークを **{days_ago}日より古いメールから解除**します。\n\n**本当に実行しますか？**"
         else:
@@ -390,9 +398,8 @@ def actual_run_file_deletion_logic(main_elements):
                 if "エラー:" in delete_result_message:
                     db_had_error = True 
                     status_label.config(text="状態: DB削除エラー。")
-                elif "INFO:" in delete_result_message: # INFOメッセージの場合
+                elif "INFO:" in delete_result_message:
                      print(f"INFO: {delete_result_message}")
-                     # db_had_error は False のまま
                 else:
                      print(f"INFO: {delete_result_message}") 
             except NameError:
@@ -415,17 +422,15 @@ def actual_run_file_deletion_logic(main_elements):
             status_label.config(text=f"状態: Outlookカテゴリ解除中...")
             root.update_idletasks()
             try:
-                # ▼▼▼【注意】days_ago=0 の場合はスキップする古いロジック ▼▼▼
-                reset_days_param = days_ago if days_ago > 0 else None 
-                if reset_days_param is not None:
-                    reset_count = remove_processed_category(
-                        main_elements["account_entry"].get().strip(),
-                        main_elements["folder_entry"].get().strip(),
-                        days_ago=reset_days_param
-                    )
-                    print(f"INFO: Outlookカテゴリリセット {reset_count} 件完了。") 
-                else:
-                     print("INFO: days_ago=0 のため、Outlookカテゴリの解除はスキップされました。")
+                # ▼▼▼【修正】days_ago=0 の場合は None を渡して全期間解除 ▼▼▼
+                reset_days_param = None if days_ago == 0 else days_ago 
+                
+                reset_count = remove_processed_category(
+                    main_elements["account_entry"].get().strip(),
+                    main_elements["folder_entry"].get().strip(),
+                    days_ago=reset_days_param
+                )
+                print(f"INFO: Outlookカテゴリリセット {reset_count} 件完了。") 
             except NameError:
                  category_reset_error = "カテゴリ解除関数(remove_processed_category)が見つかりません。"
                  print(f"❌ {category_reset_error}")
@@ -437,11 +442,10 @@ def actual_run_file_deletion_logic(main_elements):
 
         final_msg = delete_result_message 
         if reset_category_flag:
-            # ▼▼▼【注意】スキップメッセージ分岐が残っている ▼▼▼
-            if reset_days_param is not None:
-                 final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
-            else:
-                 final_msg += "\n(Outlookカテゴリの解除はスキップされました)"
+            final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
+            # ▼▼▼【削除】古いスキップメッセージの分岐を削除 ▼▼▼
+            # if reset_days_param is not None: ...
+            # else: ...
                  
         msg_title = "処理完了"
         msg_icon = 'info'
@@ -460,8 +464,6 @@ def actual_run_file_deletion_logic(main_elements):
         elif not db_exists and reset_category_flag:
              msg_title = "処理完了 (カテゴリ解除のみ)"
              final_status_text = "状態: カテゴリ解除完了 (DBスキップ)。"
-        
-        # データベースファイルが見つからなかった INFO メッセージの場合
         elif "INFO:" in delete_result_message and not reset_category_flag:
              msg_title = "処理スキップ"
              msg_icon = 'info'
@@ -478,10 +480,8 @@ def actual_run_file_deletion_logic(main_elements):
          except: pass 
          
     finally:
-        # --- ▼▼▼【COM終了 追加】▼▼▼ ---
         print(f"[CHECKER] Thread {thread_id} (Deletion) CoUninitialize() CALLED.")
         pythoncom.CoUninitialize() 
-        # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
 
 # ----------------------------------------------------
 # メイン実行関数 (GUI起動)
@@ -545,8 +545,8 @@ def main():
     ttk.Label(days_frame, text="未処理メールの検索期間 (N日前まで):").pack(side=tk.LEFT)
     extract_days_entry = ttk.Entry(days_frame, textvariable=extract_days_var, width=10)
     extract_days_entry.pack(side=tk.LEFT, padx=5)
-    # ▼▼▼【注意】GUIのラベルが「0=今日」になっていない ▼▼▼
-    ttk.Label(days_frame, text="日 (空欄の場合は全期間)").pack(side=tk.LEFT)
+    # ▼▼▼【修正】GUIのラベルを「0=今日」に ▼▼▼
+    ttk.Label(days_frame, text="日 (0=今日, 空欄=全期間)").pack(side=tk.LEFT)
     run_button = ttk.Button(process_frame, text="抽出実行") 
     run_button.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
     search_button = ttk.Button(process_frame, text="検索一覧 (結果表示)", state=tk.DISABLED)
@@ -561,8 +561,8 @@ def main():
     ttk.Label(delete_frame, text="N日前より古いレコード削除:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
     delete_days_entry = ttk.Entry(delete_frame, textvariable=delete_days_var, width=10)
     delete_days_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w') 
-    # ▼▼▼【注意】GUIのラベルが「0=全削除」になっていない ▼▼▼
-    ttk.Label(delete_frame, text="日").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w') 
+    # ▼▼▼【修正】GUIのラベルを「0=全削除」に ▼▼▼
+    ttk.Label(delete_frame, text="日 (0=全削除)").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w') 
     delete_button = ttk.Button(delete_frame, text="レコード削除実行")
     delete_button.grid(row=1, column=0, columnspan=4, padx=5, pady=5, sticky='ew') 
     reset_category_checkbox = ttk.Checkbutton(
@@ -575,7 +575,6 @@ def main():
     status_label = ttk.Label(main_frame, text="状態: 待機中", relief=tk.SUNKEN, anchor='w')
     status_label.pack(side=tk.BOTTOM, fill='x', padx=10, pady=(5, 0))
     
-    # --- main_elements にグローバル変数として代入 ---
     main_elements = {
         "account_entry": account_entry,
         "folder_entry": folder_entry,
@@ -586,7 +585,7 @@ def main():
         "settings_button": settings_button, 
         "reset_category_var": reset_category_var, 
         "extract_days_var": extract_days_var,
-        "run_button": run_button, # 抽出ボタンも追加
+        "run_button": run_button,
         "gui_queue": gui_queue
     }
     
@@ -603,7 +602,6 @@ def main():
 
     # --- 起動時の未処理メールチェック (COM初期化追加 + チェッカー) ---
     def check_unprocessed_async(account_email, folder_path, q, initial_days_value):
-        # --- ▼▼▼【COM初期化 追加】▼▼▼ ---
         thread_id = threading.get_ident()
         print(f"\n[CHECKER] Thread {thread_id} (Async Check) STARTING...")
         try:
@@ -612,9 +610,8 @@ def main():
         except Exception as e:
             print(f"[CHECKER] Thread {thread_id} (Async Check) CoInitialize() FAILED: {e}")
             pass
-        # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
         
-        try: # メインのロジックを try で囲む
+        try: 
             output_path_exists = os.path.exists(output_file_abs_path)
             days_to_check_val = None
             try:
@@ -628,7 +625,6 @@ def main():
                  days_to_check_val = None 
 
             try:
-                # 内部関数 (CoInitialize なし) を呼び出す
                 unprocessed_count = has_unprocessed_mail(folder_path, account_email, days_to_check=days_to_check_val)
                 
                 if unprocessed_count > 0:
@@ -651,10 +647,8 @@ def main():
              q.put("状態: 未処理チェックで重大なエラー。")
              
         finally:
-             # --- ▼▼▼【COM終了 追加】▼▼▼ ---
              print(f"[CHECKER] Thread {thread_id} (Async Check) CoUninitialize() CALLED.")
              pythoncom.CoUninitialize()
-             # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
              
     def check_queue():
         try:
