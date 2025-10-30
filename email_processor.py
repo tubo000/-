@@ -1,4 +1,4 @@
-# email_processor.py (全ての修正を統合した最終版)
+# email_processor.py (COM初期化削除 + チェッカー追加版)
 
 import pandas as pd
 import win32com.client as win32
@@ -12,11 +12,12 @@ import uuid
 import traceback
 from typing import Dict, Any, List
 import sqlite3
+import threading # 📌 チェッカー用に追加
+
 # ----------------------------------------------------------------------
 # イニシャルを検出する正規表現を追加
 # ----------------------------------------------------------------------
 INITIALS_REGEX = r'(\b[A-Z]{2}\b|\b[A-Z]\s*.\s*[A-Z]\b|名前\([A-Z]{2}\))'
-
 # --- インポート処理 ---
 
 # 1. get_attachment_text のデフォルト（代替）定義
@@ -38,7 +39,7 @@ try:
     from config import MUST_INCLUDE_KEYWORDS, EXCLUDE_KEYWORDS, SCRIPT_DIR, OUTPUT_CSV_FILE as OUTPUT_FILENAME
     try:
         from config import get_outlook_folder as real_get_outlook_folder
-        get_outlook_folder = real_get_outlook_folder # インポート成功、デフォルト関数を上書き
+        get_outlook_folder = real_get_outlook_folder
         print("INFO: config.py から get_outlook_folder を読み込みました。")
     except ImportError:
         print("警告: config.py に get_outlook_folder が定義されていません。デフォルト処理を使用します。")
@@ -100,31 +101,35 @@ def mark_email_as_processed(mail_item):
     return False
 
 # ----------------------------------------------------------------------
-# 💡 処理済みカテゴリの解除 (COM初期化削除 + デバッグログ)
+# 💡 処理済みカテゴリの解除 (COM初期化削除 + チェッカー)
 # ----------------------------------------------------------------------
 def remove_processed_category(target_email: str, folder_path: str, days_ago: int = None) -> int:
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"[CHECKER] Thread {thread_id} (email_processor): ENTERED remove_processed_category")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
+    
     reset_count = 0
     start_date_dt = None
-
-    print("\n--- DEBUG: remove_processed_category 開始 ---")
+    
+    print(f"\n--- DEBUG: remove_processed_category 開始 (Thread: {thread_id}) ---")
     print(f"DEBUG: target_email='{target_email}', folder_path='{folder_path}', days_ago={days_ago}")
 
     if days_ago is not None:
         try:
              days_ago = int(days_ago)
-             if days_ago <= 0: # 0以下は全期間 (None) 扱い
+             if days_ago <= 0:
                   print(f"INFO(remove_category): days_ago が {days_ago} のため、全期間 (None) として扱います。")
                   days_ago = None
              else:
                   start_date_dt = (datetime.datetime.now() - timedelta(days=days_ago))
-                  print(f"DEBUG: 計算された cutoff datetime (これより古いメールのカテゴリを解除): {start_date_dt}")
+                  print(f"DEBUG: 計算された cutoff datetime: {start_date_dt}")
         except (ValueError, TypeError):
              print(f"警告(remove_category): days_ago '{days_ago}' が不正なため、None として扱います。")
-             days_ago = None 
-             start_date_dt = None # days_ago が None なので start_date_dt も None
+             days_ago = None
+             start_date_dt = None
 
     try:
-        # --- 📌 CoInitialize() 削除 ---
         outlook = None
         try:
             outlook = win32.GetActiveObject("Outlook.Application")
@@ -141,15 +146,13 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
 
         items = folder.Items
         try:
-             initial_item_count = items.Count
-             print(f"DEBUG: Restrict前のアイテム数: {initial_item_count}")
+             print(f"DEBUG: Restrict前のアイテム数: {items.Count}")
         except Exception as count_err:
              print(f"警告(remove_category): Restrict前のアイテム数取得失敗: {count_err}")
 
         filter_query_list = []
-        # 日付フィルタ (days_ago が 1 以上の場合のみ)
         if start_date_dt is not None:
-            start_date_str = start_date_dt.strftime('%Y/%m/%d %H:%M') # 時刻も比較
+            start_date_str = start_date_dt.strftime('%Y/%m/%d %H:%M')
             filter_query_list.append(f"[ReceivedTime] < '{start_date_str}'")
             print(f"DEBUG: Restrict 条件 (日付): [ReceivedTime] < '{start_date_str}'")
         else:
@@ -162,11 +165,8 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
             try:
                 items_to_reset = items.Restrict(query_string)
                 print(f"DEBUG: Restrict 実行成功。")
-                try:
-                     restricted_count = items_to_reset.Count
-                     print(f"DEBUG: Restrict後のアイテム数: {restricted_count}")
-                except Exception as count_err:
-                     print(f"警告(remove_category): Restrict後のアイテム数取得失敗: {count_err}")
+                try: print(f"DEBUG: Restrict後のアイテム数: {items_to_reset.Count}")
+                except Exception as count_err: print(f"警告(remove_category): Restrict後のアイテム数取得失敗: {count_err}")
             except Exception as restrict_error:
                 print(f"警告: カテゴリ解除のRestrict(日付)に失敗: {restrict_error}。全件チェックにフォールバックします。")
 
@@ -180,7 +180,6 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
         item_counter = 0
         item = items_to_reset.GetFirst()
         
-        # ▼▼▼【修正】無限ループバグ修正 (GetNextをループ最後に移動) ▼▼▼
         while item:
             item_counter += 1
             mail_entry_id_debug = getattr(item, 'EntryID', 'UNKNOWN_ID')
@@ -191,17 +190,16 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
                     if PROCESSED_CATEGORY_NAME in current_categories:
                         print(f"DEBUG: ★ カテゴリ発見！解除試行 (ID: {mail_entry_id_debug})")
                         
-                        # (日付Restrict失敗時のフォールバックチェック)
-                        is_target_date = True # デフォルトは解除対象
-                        if start_date_dt is not None: # 日付指定がある場合のみチェック
+                        is_target_date = True
+                        if start_date_dt is not None:
                             received_time = getattr(item, 'ReceivedTime', datetime.datetime.now())
                             if received_time.tzinfo is not None:
                                 received_time = received_time.replace(tzinfo=None)
-                            if received_time >= start_date_dt: # 基準日時より新しいものは対象外
+                            if received_time >= start_date_dt:
                                 is_target_date = False
                                 print(f"DEBUG:   -> 日付フォールバック: 対象外 (受信日時 {received_time})")
 
-                        if is_target_date: # 日付条件も満たす場合のみ解除
+                        if is_target_date:
                             try:
                                 categories_list = [c.strip() for c in current_categories.split(',') if c.strip() != PROCESSED_CATEGORY_NAME]
                                 new_categories = ", ".join(categories_list)
@@ -217,13 +215,11 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
                 except Exception as e:
                     print(f"警告(remove_category Loop): アイテム処理中エラー (ID: {mail_entry_id_debug}): {e}")
             
-            # --- 次のアイテムへ (ループの最後) ---
             try:
                 item = items_to_reset.GetNext()
             except:
                 print(f"DEBUG: GetNext() でエラーまたは終端。ループ終了。")
                 break
-        # ▲▲▲【修正】ここまで ▲▲▲
                 
         print(f"DEBUG: カテゴリ解除ループ終了。総ループ回数: {item_counter}")
 
@@ -233,15 +229,23 @@ def remove_processed_category(target_email: str, folder_path: str, days_ago: int
     finally:
         pass # --- 📌 CoUninitialize() 削除 ---
 
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
     print(f"DEBUG: remove_processed_category 終了。解除された件数: {reset_count}")
+    print(f"[CHECKER] Thread {thread_id} (email_processor): EXITING remove_processed_category")
     print("---------------------------------------")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
     return reset_count
 
 
 # ----------------------------------------------------------------------
-# 💡 未処理メールの件数をカウント (COM初期化削除 + デバッグログ)
+# 💡 未処理メールの件数をカウント (COM初期化削除 + チェッカー)
 # ----------------------------------------------------------------------
 def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int = None) -> int:
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"[CHECKER] Thread {thread_id} (email_processor): ENTERED has_unprocessed_mail")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
+
     unprocessed_count = 0
     if not folder_path or not target_email: return 0
 
@@ -296,7 +300,6 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
 
             item = items.GetFirst()
             
-            # ▼▼▼【修正】無限ループバグ修正 (GetNextをループ最後に移動) ▼▼▼
             while item:
                  mail_entry_id_debug = 'UNKNOWN_ID'
                  try:
@@ -323,12 +326,9 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
                             body = str(getattr(item, 'Body', ''))
                             full_search_text = subject + " " + body
                             must_include = any(re.search(kw, full_search_text, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
-                            
-                            # ▼▼▼【注意】昨日のコードでは本文イニシャルもカウント対象 ▼▼▼
-                            has_initials_in_text = re.search(INITIALS_REGEX, full_search_text) 
+                            has_initials_in_text = re.search(INITIALS_REGEX, full_search_text)
 
                             is_target_for_count = must_include or has_initials_in_text or (has_files and has_initials_in_filename)
-                            # ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
 
                             if is_target_for_count:
                                 unprocessed_count += 1
@@ -342,7 +342,6 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
                      item = items.GetNext()
                  except:
                      break
-            # ▲▲▲【修正】ここまで ▲▲▲
 
     except Exception as e:
         print(f"警告(has_unprocessed Main): チェック処理エラー: {e}")
@@ -350,25 +349,29 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
     finally:
         pass # --- 📌 CoUninitialize() 削除 ---
 
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
     print(f"DEBUG: has_unprocessed_mail 最終カウント: {unprocessed_count}")
-    print(f"--- DEBUG (has_unprocessed_mail 終了) ---")
+    print(f"[CHECKER] Thread {thread_id} (email_processor): EXITING has_unprocessed_mail")
+    print("--- DEBUG (has_unprocessed_mail 終了) ---")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
     return unprocessed_count
 
 # ----------------------------------------------------------------------
-# 💡 メイン抽出関数: Outlookからメールを取得 (全機能統合)
+# 💡 メイン抽出関数: Outlookからメールを取得 (COM初期化削除 + チェッカー)
 # ----------------------------------------------------------------------
 def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: str, read_mode: str = "all", days_ago: int = None) -> pd.DataFrame:
-    """
-    Outlookからメールデータを抽出する。read_modeに基づいてフィルタリングを行う。
-    days_ago=0 の場合は今日受信したメールのみを対象とする。
-    """
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"[CHECKER] Thread {thread_id} (email_processor): ENTERED get_mail_data_from_outlook_in_memory")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
+
     data_records = []
     temp_dir = os.path.join(SCRIPT_DIR, "temp_attachments_safe")
     os.makedirs(temp_dir, exist_ok=True)
     previous_attachment_content = _load_previous_attachment_content()
 
     start_date_dt = None
-    log_period_message = "全期間" 
+    log_period_message = "全期間"
 
     if days_ago is not None:
         try:
@@ -387,7 +390,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
              start_date_dt = None
              log_period_message = "全期間 (入力不正)"
 
-    print(f"INFO: Outlookメール読み込み開始 (対象期間: {log_period_message})")
+    print(f"INFO: Outlookメール読み込み開始 (対象期間: {log_period_message}) (Thread: {thread_id})")
 
     existing_ids_set = set()
     db_path = os.path.join(os.path.abspath(SCRIPT_DIR), DATABASE_NAME)
@@ -438,7 +441,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
         processed_item_count = 0
         item = items.GetFirst()
 
-        # ▼▼▼【修正】無限ループバグ修正 (if...else 構造) ▼▼▼
         while item:
             if new_record_counter >= max_new_records:
                 print(f"INFO: 新規レコードが {max_new_records} 件に達したため、処理を中断します。")
@@ -459,7 +461,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
             is_target = False
 
             if item.Class == 43:
-                skip_reason = None # スキップ理由
+                skip_reason = None
                 try:
                     mail_item = item
                     try:
@@ -511,7 +513,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                     
                     if skip_reason:
                         print(f"  -> スキップ: {skip_reason}")
-                        # ★ continue は使わない
                     
                     else:
                         # --- スキップ理由がない場合のみ、詳細な処理に進む ---
@@ -577,8 +578,14 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         
                         else:
                             is_target = has_must_include_keyword or (has_files and has_initials_in_filename)
-                            # ... (ログ表示) ...
-                            print(f"  -> 判定: is_target={is_target} (...)") 
+                            target_reason = []
+                            if has_must_include_keyword: target_reason.append("必須キーワードあり")
+                            if has_files and has_initials_in_filename: target_reason.append("添付ファイル名にイニシャルあり")
+                            if not is_target:
+                                 if not has_must_include_keyword: target_reason.append("必須キーワードなし")
+                                 if not has_files: target_reason.append("添付ファイルなし")
+                                 elif not has_initials_in_filename: target_reason.append("添付ファイル名にイニシャルなし")
+                            print(f"  -> 判定: is_target={is_target} (理由: {', '.join(target_reason)})")
 
                             if is_target:
                                 if not is_already_in_db:
@@ -597,7 +604,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
 
                 except (pythoncom.com_error, AttributeError, Exception) as item_ex:
                     current_id = mail_entry_id if mail_entry_id != 'UNKNOWN' else getattr(item, 'EntryID', 'ID取得失敗')
-                    print(f"警告(Item Loop): 処理中にエラー (ID: {current_id}): {item_ex}\n{traceback.format_exc(limit=1)}")
+                    print(f"警告(Item Loop): 処理中にエラーが発生しました (ID: {current_id}): {item_ex}\n{traceback.format_exc(limit=1)}")
                     if mail_item and not is_processed:
                         try: mark_email_as_processed(mail_item)
                         except Exception as mark_e: print(f"  -> 警告: エラー後のマーク付け失敗: {mark_e}")
@@ -613,13 +620,11 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
             else:
                  print(f"[{processed_item_count}] スキップ: メールアイテムではありません (Class: {item.Class})")
 
-            # --- ループの最後に必ず次のアイテムを取得 ---
             try:
                 item = items.GetNext() 
             except (pythoncom.com_error, Exception) as next_err:
                  print(f"警告: GetNext() でエラー。ループ中断。エラー: {next_err}")
                  break 
-        # ▲▲▲【修正】ここまで ▲▲▲
 
     except pythoncom.com_error as com_outer_err:
          raise RuntimeError(f"Outlook操作エラー (COM): {com_outer_err}\n{traceback.format_exc()}")

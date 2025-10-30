@@ -1,4 +1,4 @@
-# main_application.py (COM初期化をスレッド側に追加した最終版)
+# main_application.py (COM初期化 + チェッカー追加版)
 import os
 import sys
 import pandas as pd
@@ -32,25 +32,35 @@ from email_processor import remove_processed_category, PROCESSED_CATEGORY_NAME
 
 def open_outlook_email_by_id(entry_id: str):
     """Entry IDを使用してOutlookデスクトップアプリでメールを開く関数。（GUI版）"""
-    # この関数はメインスレッドから直接呼ばれるため、COM初期化/終了を自己完結させる
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"\n[CHECKER] Thread {thread_id} (MainThread/OpenEmail) STARTING...")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
+    
     if not entry_id:
         messagebox.showerror("エラー", "Entry IDが指定されていません。")
         return
+
     try:
         pythoncom.CoInitialize() # ★ 維持
+        print(f"[CHECKER] Thread {thread_id} (MainThread/OpenEmail) CoInitialize() CALLED.")
         try:
             outlook_app = win32.GetActiveObject("Outlook.Application")
         except:
             outlook_app = win32.Dispatch("Outlook.Application")
+            
         namespace = outlook_app.GetNamespace("MAPI")
         olItem = namespace.GetItemFromID(entry_id)
+        
         if olItem:
             olItem.Display()
         else:
             messagebox.showerror("エラー", "指定された Entry ID のメールが見つかりませんでした。")
+            
     except Exception as e:
         messagebox.showerror("Outlook連携エラー", f"Outlook連携中にエラーが発生しました: {e}\nOutlookが起動しているか確認してください。")
     finally:
+        print(f"[CHECKER] Thread {thread_id} (MainThread/OpenEmail) CoUninitialize() CALLED.")
         pythoncom.CoUninitialize() # ★ 維持
 
 
@@ -68,18 +78,20 @@ def reorder_output_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df.reindex(columns=fixed_leading_cols + remaining_cols, fill_value='N/A')
 
 # ----------------------------------------------------
-# 抽出処理ロジック (COM初期化は維持)
+# 抽出処理ロジック (COM初期化は維持 + チェッカー)
 # ----------------------------------------------------
-# main_application.py の actual_run_extraction_logic 関数 (ボタン有効化をQueue経由に変更)
-
 def actual_run_extraction_logic(root, main_elements, target_email, folder_path, read_mode, read_days, status_label):
     
-    # 抽出ボタン（run_button）はこの関数内では直接操作しない
-    # run_button = main_elements.get("run_button") # 取得は不要
+    # --- ▼▼▼ チェッカー ▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"\n[CHECKER] Thread {thread_id} (Extraction) STARTING...")
+    # --- ▲▲▲ チェッカー ▲▲▲ ---
     
     try:
         pythoncom.CoInitialize()
-    except Exception:
+        print(f"[CHECKER] Thread {thread_id} (Extraction) CoInitialize() CALLED.")
+    except Exception as e:
+        print(f"[CHECKER] Thread {thread_id} (Extraction) CoInitialize() FAILED: {e}")
         pass 
         
     try:
@@ -87,24 +99,22 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         if read_days.strip():
             try:
                 days_ago = int(read_days)
-                if days_ago < 0: 
-                    raise ValueError("日数は0以上の整数である必要があります")
+                # ▼▼▼【注意】このコードでは 0 はエラーになる ▼▼▼
+                if days_ago < 1: raise ValueError("日数は1以上の整数を指定してください。")
             except ValueError:
-                messagebox.showerror("入力エラー", "期間指定は **0以上** の整数で指定してください。\n(空欄の場合は全期間)")
+                messagebox.showerror("入力エラー", "期間指定は1以上の整数で指定してください。")
                 status_label.config(text="状態: 抽出失敗 (期間入力不正)。")
                 return # finally が実行される
 
-        if days_ago == 0:
-             mode_text = "未処理 (今日のみ)"
-        elif days_ago is not None and days_ago > 0 :
-             mode_text = f"未処理 (過去{days_ago}日)"
+        if days_ago is not None:
+            mode_text = f"未処理 (過去{days_ago}日)"
         else:
-             mode_text = "未処理 (全期間)"
+            mode_text = "未処理 (全期間)"
             
         status_label.config(text=f"状態: {target_email} アカウントからメール取得中 ({mode_text})...")
-        root.update_idletasks() # ステータスを即時反映
+        root.update_idletasks() 
 
-        # email_processor の関数を呼び出す
+        # 内部関数 (CoInitialize なし) を呼び出す
         df_mail_data = get_mail_data_from_outlook_in_memory(
             folder_path, 
             target_email, 
@@ -185,26 +195,26 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         traceback.print_exc()
         
     finally:
-        # --- ▼▼▼ ここでボタン有効化のメッセージをキューに入れる ▼▼▼ ---
+        # --- ボタン有効化のメッセージをキューに入れる ---
         q = main_elements.get("gui_queue")
         if q:
-            # 処理が成功してもエラーでも、必ずボタンを有効化するよう依頼
             q.put("EXTRACTION_COMPLETE_ENABLE_BUTTON") 
-        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         
+        # --- ▼▼▼ チェッカー ▼▼▼ ---
+        print(f"[CHECKER] Thread {thread_id} (Extraction) CoUninitialize() CALLED.")
+        # --- ▲▲▲ チェッカー ▲▲▲ ---
         pythoncom.CoUninitialize() # ★ スレッド終了時に実行
 
 # ----------------------------------------------------
-# 抽出ボタンコールバック (ボタン無効化)
+# 抽出ボタンコールバック (ボタン無効化 + チェッカー)
 # ----------------------------------------------------
-# main_application.py の run_extraction_callback 関数 (修正版)
-
 def run_extraction_callback():
     """抽出実行ボタンが押されたときの処理"""
     
-    # --- チェッカー (デバッグログは残しておきます) ---
+    # --- ▼▼▼【ここからチェッカー】▼▼▼ ---
+    thread_id = threading.get_ident()
     print("\n" + "="*40)
-    print("DEBUG: 'run_extraction_callback' が呼び出されました。")
+    print(f"[CHECKER] Thread {thread_id} (MainThread): 'run_extraction_callback' が呼び出されました。")
     
     run_button = main_elements.get("run_button")
     
@@ -225,19 +235,16 @@ def run_extraction_callback():
             
     print("DEBUG: これから if 文の判定に入ります...")
     print("="*40 + "\n")
-    # --- チェッカーここまで ---
+    # --- ▲▲▲【チェッカーここまで】▲▲▲ ---
     
-    
-    # --- ▼▼▼【ここを修正】▼▼▼ ---
-    # run_button.cget('state') を str() で囲み、確実にPython文字列として比較する
+    # str() で比較
     if run_button and str(run_button.cget('state')) == tk.NORMAL:
-    # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
         run_button.config(state=tk.DISABLED)
         print("INFO: 抽出実行ボタンを無効化。処理開始...")
         run_extraction_thread(root, main_elements, main_elements["extract_days_var"])
     else:
-        # (str() で比較してもここに来る場合、state が 'normal' ではない)
         print(f"INFO: 抽出処理が既に実行中か、ボタンが無効です。(if文がFalseと判定 / state='{current_state}')")
+
 def run_extraction_thread(root, main_elements, extract_days_var):
     account_email = main_elements["account_entry"].get().strip()
     folder_path = main_elements["folder_entry"].get().strip()
@@ -252,7 +259,7 @@ def run_extraction_thread(root, main_elements, extract_days_var):
             try:
                  if run_button.winfo_exists(): run_button.config(state=tk.NORMAL)
                  print("INFO: 入力エラーのため抽出実行ボタンを有効化しました。")
-            except: pass # エラー時有効化失敗は許容
+            except: pass
         return
 
     thread = threading.Thread(target=lambda: actual_run_extraction_logic(root, main_elements, account_email, folder_path, read_mode, read_days, status_label))
@@ -288,7 +295,8 @@ def delete_processed_records(days_ago: int, db_path: str) -> str:
         target_message = f"'{cutoff_date.strftime('%Y年%m月%d日')}' より古い取り込み記録"
     deleted_count = 0
     if not os.path.exists(db_path):
-        return f"エラー: データベースファイルが見つかりません ({os.path.basename(db_path)})"
+        # 修正: エラーではなく情報メッセージを返す
+        return f"INFO: データベースファイルが見つかりません ({os.path.basename(db_path)})。スキップします。"
     conn = None
     try:
         conn = sqlite3.connect(db_path)
@@ -315,15 +323,19 @@ def delete_processed_records(days_ago: int, db_path: str) -> str:
         if conn: conn.close()
 
 # ----------------------------------------------------
-# 削除スレッド本体 (COM初期化追加)
+# 削除スレッド本体 (COM初期化追加 + チェッカー)
 # ----------------------------------------------------
 def actual_run_file_deletion_logic(main_elements):
     
     # --- ▼▼▼【COM初期化 追加】▼▼▼ ---
+    thread_id = threading.get_ident()
+    print(f"\n[CHECKER] Thread {thread_id} (Deletion) STARTING...")
     try:
-        pythoncom.CoInitialize() 
-    except Exception:
-        pass # 既に初期化されている場合など
+        pythoncom.CoInitialize()
+        print(f"[CHECKER] Thread {thread_id} (Deletion) CoInitialize() CALLED.")
+    except Exception as e:
+        print(f"[CHECKER] Thread {thread_id} (Deletion) CoInitialize() FAILED: {e}")
+        pass
     # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
     
     try: # メインのロジックを try で囲み、finally で CoUninitialize する
@@ -335,22 +347,23 @@ def actual_run_file_deletion_logic(main_elements):
 
         try:
             days_ago = int(days_input)
-            if days_ago < 0: 
-                raise ValueError("日数は0以上の整数を指定してください。")
+            # ▼▼▼【注意】このコードでは 0 はエラーになる ▼▼▼
+            if days_ago < 1: 
+                raise ValueError("日数は1以上の整数を指定してください。")
         except ValueError as e:
-            messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}\n(0以上の整数で指定)")
+            # ▼▼▼【注意】エラーメッセージも「1以上」のまま ▼▼▼
+            messagebox.showerror("入力エラー", f"削除日数の入力が不正です: {e}\n(1以上の整数で指定)")
             status_label.config(text="状態: 削除失敗 (入力不正)。")
             return # finally が実行される
 
         reset_category_flag = reset_category_var.get()
 
-        if days_ago == 0:
+        if days_ago == 0: # この条件は通らない
              confirm_prompt = f"🚨 **警告:** データベース内の**すべてのレコード**を削除します。\n"
         else:
              confirm_prompt = f"🚨 **警告:** データベース内の **{days_ago}日より古いレコード**を削除します。\n"
         if reset_category_flag:
-            if days_ago == 0:
-                 confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークを**すべて解除**します。\n\n**本当に実行しますか？**"
+            if days_ago == 0: pass # 通らない
             else:
                  confirm_prompt += f"また、Outlookメールの『{PROCESSED_CATEGORY_NAME}』マークを **{days_ago}日より古いメールから解除**します。\n\n**本当に実行しますか？**"
         else:
@@ -377,6 +390,9 @@ def actual_run_file_deletion_logic(main_elements):
                 if "エラー:" in delete_result_message:
                     db_had_error = True 
                     status_label.config(text="状態: DB削除エラー。")
+                elif "INFO:" in delete_result_message: # INFOメッセージの場合
+                     print(f"INFO: {delete_result_message}")
+                     # db_had_error は False のまま
                 else:
                      print(f"INFO: {delete_result_message}") 
             except NameError:
@@ -399,14 +415,17 @@ def actual_run_file_deletion_logic(main_elements):
             status_label.config(text=f"状態: Outlookカテゴリ解除中...")
             root.update_idletasks()
             try:
-                reset_days_param = None if days_ago == 0 else days_ago 
-                # 内部関数 (CoInitialize なし) を呼び出す
-                reset_count = remove_processed_category(
-                    main_elements["account_entry"].get().strip(),
-                    main_elements["folder_entry"].get().strip(),
-                    days_ago=reset_days_param
-                )
-                print(f"INFO: Outlookカテゴリリセット {reset_count} 件完了。") 
+                # ▼▼▼【注意】days_ago=0 の場合はスキップする古いロジック ▼▼▼
+                reset_days_param = days_ago if days_ago > 0 else None 
+                if reset_days_param is not None:
+                    reset_count = remove_processed_category(
+                        main_elements["account_entry"].get().strip(),
+                        main_elements["folder_entry"].get().strip(),
+                        days_ago=reset_days_param
+                    )
+                    print(f"INFO: Outlookカテゴリリセット {reset_count} 件完了。") 
+                else:
+                     print("INFO: days_ago=0 のため、Outlookカテゴリの解除はスキップされました。")
             except NameError:
                  category_reset_error = "カテゴリ解除関数(remove_processed_category)が見つかりません。"
                  print(f"❌ {category_reset_error}")
@@ -418,7 +437,12 @@ def actual_run_file_deletion_logic(main_elements):
 
         final_msg = delete_result_message 
         if reset_category_flag:
-            final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
+            # ▼▼▼【注意】スキップメッセージ分岐が残っている ▼▼▼
+            if reset_days_param is not None:
+                 final_msg += f"\nOutlookカテゴリリセット: {reset_count} 件完了"
+            else:
+                 final_msg += "\n(Outlookカテゴリの解除はスキップされました)"
+                 
         msg_title = "処理完了"
         msg_icon = 'info'
         final_status_text = "状態: 削除処理完了。"
@@ -436,32 +460,37 @@ def actual_run_file_deletion_logic(main_elements):
         elif not db_exists and reset_category_flag:
              msg_title = "処理完了 (カテゴリ解除のみ)"
              final_status_text = "状態: カテゴリ解除完了 (DBスキップ)。"
+        
+        # データベースファイルが見つからなかった INFO メッセージの場合
+        elif "INFO:" in delete_result_message and not reset_category_flag:
+             msg_title = "処理スキップ"
+             msg_icon = 'info'
+             final_status_text = "状態: DBファイルなし。"
+             
         if msg_icon == 'info': messagebox.showinfo(msg_title, final_msg)
         elif msg_icon == 'warning': messagebox.showwarning(msg_title, final_msg)
         status_label.config(text=final_status_text) 
     
     except Exception as outer_err:
-         # スレッド全体の予期せぬエラー
          print(f"❌ 削除スレッド全体で予期せぬエラー: {outer_err}\n{traceback.format_exc()}")
          try:
               status_label.config(text="状態: 削除スレッドで重大なエラー。")
-         except: pass # GUI更新失敗は無視
+         except: pass 
          
     finally:
         # --- ▼▼▼【COM終了 追加】▼▼▼ ---
+        print(f"[CHECKER] Thread {thread_id} (Deletion) CoUninitialize() CALLED.")
         pythoncom.CoUninitialize() 
         # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
 
 # ----------------------------------------------------
 # メイン実行関数 (GUI起動)
 # ----------------------------------------------------
-
-# (グローバル変数として root と main_elements を宣言 - コールバック用)
 root = None
 main_elements = {}
 
 def main():
-    global root, main_elements # グローバル変数を使用
+    global root, main_elements
     
     root = tk.Tk()
     root.title("Outlook Mail Search Tool")
@@ -516,7 +545,8 @@ def main():
     ttk.Label(days_frame, text="未処理メールの検索期間 (N日前まで):").pack(side=tk.LEFT)
     extract_days_entry = ttk.Entry(days_frame, textvariable=extract_days_var, width=10)
     extract_days_entry.pack(side=tk.LEFT, padx=5)
-    ttk.Label(days_frame, text="日 (0=今日, 空欄=全期間)").pack(side=tk.LEFT)
+    # ▼▼▼【注意】GUIのラベルが「0=今日」になっていない ▼▼▼
+    ttk.Label(days_frame, text="日 (空欄の場合は全期間)").pack(side=tk.LEFT)
     run_button = ttk.Button(process_frame, text="抽出実行") 
     run_button.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
     search_button = ttk.Button(process_frame, text="検索一覧 (結果表示)", state=tk.DISABLED)
@@ -531,7 +561,8 @@ def main():
     ttk.Label(delete_frame, text="N日前より古いレコード削除:").grid(row=0, column=0, padx=5, pady=5, sticky='w')
     delete_days_entry = ttk.Entry(delete_frame, textvariable=delete_days_var, width=10)
     delete_days_entry.grid(row=0, column=1, padx=5, pady=5, sticky='w') 
-    ttk.Label(delete_frame, text="日 (0=全削除)").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w') 
+    # ▼▼▼【注意】GUIのラベルが「0=全削除」になっていない ▼▼▼
+    ttk.Label(delete_frame, text="日").grid(row=0, column=2, padx=(0, 10), pady=5, sticky='w') 
     delete_button = ttk.Button(delete_frame, text="レコード削除実行")
     delete_button.grid(row=1, column=0, columnspan=4, padx=5, pady=5, sticky='ew') 
     reset_category_checkbox = ttk.Checkbutton(
@@ -556,38 +587,30 @@ def main():
         "reset_category_var": reset_category_var, 
         "extract_days_var": extract_days_var,
         "run_button": run_button, # 抽出ボタンも追加
-        "gui_queue": gui_queue  # ← ★★★ この行を追加 ★★★
+        "gui_queue": gui_queue
     }
     
-    # ----------------------------------------------------
-    # コールバック関数の定義
-    # ----------------------------------------------------
-    # (open_settings_callback, run_extraction_callback, open_search_callback は
-    # グローバル変数 root, main_elements を参照するため、main関数内にネストしなくてもOK)
-    
-    # ----------------------------------------------------
-    # ボタンにコマンドを設定
-    # ----------------------------------------------------
     settings_button.config(command=open_settings_callback)
     run_button.config(command=run_extraction_callback)
     search_button.config(command=open_search_callback)
     delete_button.config(command=lambda: run_deletion_thread(root, main_elements))
 
-    # ----------------------------------------------------
-    # 起動時の処理
-    # ----------------------------------------------------
     output_file_abs_path = os.path.abspath(DATABASE_NAME) 
     
     if os.path.exists(output_file_abs_path):
         search_button.config(state=tk.NORMAL)
         status_label.config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
 
-    # --- 起動時の未処理メールチェック (COM初期化追加) ---
+    # --- 起動時の未処理メールチェック (COM初期化追加 + チェッカー) ---
     def check_unprocessed_async(account_email, folder_path, q, initial_days_value):
         # --- ▼▼▼【COM初期化 追加】▼▼▼ ---
+        thread_id = threading.get_ident()
+        print(f"\n[CHECKER] Thread {thread_id} (Async Check) STARTING...")
         try:
             pythoncom.CoInitialize()
-        except Exception:
+            print(f"[CHECKER] Thread {thread_id} (Async Check) CoInitialize() CALLED.")
+        except Exception as e:
+            print(f"[CHECKER] Thread {thread_id} (Async Check) CoInitialize() FAILED: {e}")
             pass
         # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
         
@@ -600,7 +623,6 @@ def main():
                      if days_to_check_val < 0:
                           print("警告: 起動時チェック - 初期日数が負のため無視します。")
                           days_to_check_val = None 
-                # print(f"DEBUG: 起動時チェック - 使用する日数: {days_to_check_val}") # コメントアウト
             except (ValueError, TypeError) as e:
                  print(f"警告: 起動時チェック - 初期日数 '{initial_days_value}' の変換に失敗: {e}。全期間チェックします。")
                  days_to_check_val = None 
@@ -625,12 +647,12 @@ def main():
                     q.put("状態: 待機中（チェックエラー）。")
                     
         except Exception as outer_err:
-             # スレッド全体の予期せぬエラー
              print(f"❌ 未処理チェックスレッド全体で予期せぬエラー: {outer_err}\n{traceback.format_exc()}")
              q.put("状態: 未処理チェックで重大なエラー。")
              
         finally:
              # --- ▼▼▼【COM終了 追加】▼▼▼ ---
+             print(f"[CHECKER] Thread {thread_id} (Async Check) CoUninitialize() CALLED.")
              pythoncom.CoUninitialize()
              # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
              
@@ -638,9 +660,7 @@ def main():
         try:
             message = gui_queue.get(block=False)
             
-            # --- ▼▼▼ ここから修正 ▼▼▼ ---
             if message == "EXTRACTION_COMPLETE_ENABLE_BUTTON":
-                # 抽出完了メッセージを受け取った場合
                 run_button = main_elements.get("run_button")
                 if run_button:
                     try:
@@ -648,11 +668,9 @@ def main():
                             run_button.config(state=tk.NORMAL)
                             print("INFO: 抽出実行ボタンを有効化しました (via Queue)。")
                     except tk.TclError:
-                        pass # ウィンドウが閉じられた
+                        pass 
             else:
-                # それ以外のメッセージはステータスラベルに表示
                 status_label.config(text=message)
-            # --- ▲▲▲ 修正ここまで ▲▲▲ ---
                  
         except queue.Empty:
             pass
@@ -661,7 +679,6 @@ def main():
                  if root and root.winfo_exists(): root.after(100, check_queue)
             except tk.TclError: pass
 
-    # スレッド開始前に初期値を取得
     initial_extract_days = None
     if "extract_days_var" in main_elements:
          try: initial_extract_days = main_elements["extract_days_var"].get()
@@ -697,7 +714,7 @@ def open_search_callback():
         if cursor.fetchone() is None:
              conn.close()
              messagebox.showerror("エラー", f"データベースに 'emails' テーブルが見つかりません。")
-             try: root.deiconify() # メインウィンドウを復元
+             try: root.deiconify()
              except tk.TclError: pass
              return
              
