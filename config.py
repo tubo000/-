@@ -57,7 +57,38 @@ MASTER_COLUMNS = [
 ]
 
 # ★★★ 辞書データ（ダミーデータ生成用） ★★★
-LANGUAGES = ['Java', 'Python', 'C#', 'C++', 'JavaScript', 'SQL', 'Go', 'PHP', 'Ruby', 'Kotlin'] 
+SKILL_LANGUAGE_PATTERNS = {
+    # ----------------------------------------------------
+    # 言語 (Languages) および主要フレームワーク/ライブラリ
+    # ----------------------------------------------------
+    "Python": [r'\bPython\b', r'\bPy\s*$', r'Anaconda', r'Django', r'Flask', r'Numpy', r'Pandas', r'scikit-learn'],
+    "Java": [r'\bJava\b(?!Script)', r'\bJ2EE\b', r'\bSpring\b', r'\bHibernate\b', r'Struts', r'MyBatis', r'JVM'], # JavaScriptとの区別
+    "JavaScript": [r'JavaScript', r'\bJS\b', r'\bNode\.?js\b', r'TypeScript', r'\bTS\b', r'Vue\.?js', r'React\.?js', r'Angular', r'Next\.?js', r'Nuxt\.?js', r'jQuery'],
+    "C#": [r'\bC#\b',r'\bC＃\b' r'\b\.NET\b', r'\bDotNet\b', r'\bASP\.NET\b', r'WPF', r'Xamarin'],
+    "C++": [r'\bC\+\+\b', r'\bVC\+\+\b', r'\bSTL\b', r'Boost'],
+    "C": [r'\bC\b(?!#|\+\+)', r'\bANSI C\b', r'\bEmbedded C\b', r'POSIX'], # C#, C++ との区別
+    "PHP": [r'\bPHP\b', r'Laravel', r'Symfony', r'CakePHP'],
+    "Ruby": [r'\bRuby\b', r'Rails', r'RSpec'],
+    "Go": [r'\bGo\b', r'Golang'],
+    "Swift": [r'\bSwift\b', r'SwiftUI', r'UIKit'],
+    "Kotlin": [r'\bKotlin\b', r'Ktor'],
+    "Scala": [r'\bScala\b', r'Akka'], 
+    "ShellScript": [r'Shell Script', r'\bBash\b', r'\bsh\b', r'PowerShell'],
+    "VBA": [r'\bVBA\b', r'Excel VBA', r'マクロ'],
+    
+    # ----------------------------------------------------
+    # データベース言語 (SQL/NoSQL)
+    # ----------------------------------------------------
+    "SQL": [r'\bSQL\b', r'MySQL', r'Postgre', r'Oracle', r'MS\s*SQL', r'T-SQL', r'PL/SQL', r'Transact-SQL'],
+    "NoSQL": [r'\bNoSQL\b', r'MongoDB', r'Redis', r'Cassandra', r'DynamoDB'],
+    
+    # ----------------------------------------------------
+    # クラウド (Cloud) - 抽出元で別途欄を作成する場合は削除可能です
+    # ----------------------------------------------------
+    "AWS": [r'\bAWS\b', r'\bAmazon\s*Web\s*Services\b', r'EC2', r'S3', r'Lambda'],
+    "Azure": [r'\bAzure\b', r'Microsoft\s*Azure'],
+    "GCP": [r'\bGCP\b', r'Google\s*Cloud\s*Platform']
+}
 INDUSTRIES = ['金融', '医療', 'IT/Web開発', '製造業', '物流', '通信', '公共', 'インフラ'] 
 NAMES = [
     ('田中', '太郎', 0), ('佐藤', '花子', 0), ('鈴木', '一郎', 0), 

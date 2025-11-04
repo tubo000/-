@@ -5,7 +5,7 @@ import pandas as pd
 import re
 import math # 単金処理のためにmathをインポート
 import datetime             # 💡 追加: 日付処理用
-from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS
+from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS,SKILL_LANGUAGE_PATTERNS
 # 📌 修正1: configから高度な抽出ロジックの正規表現をインポート
 from config import RE_AGE_PATTERNS, RE_TANAKA_KW_PATTERNS, RE_TANAKA_RAW_PATTERNS, KEYWORD_TANAKA
 
@@ -531,6 +531,31 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
                 if score > current_score:
                     extracted_data[base_item_name] = cleaned_val
                     reliability_scores[base_item_name] = score
+
+            # --- 2.5. スキル・言語の抽出 (新規追加) ---
+        extracted_skills = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for skill_name, patterns in SKILL_LANGUAGE_PATTERNS.items():
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_skills.add(skill_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_skills:
+            extracted_data['スキルor言語'] = ", ".join(sorted(list(extracted_skills)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['スキルor言語'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
             
         # --- 3. 開発工程フラグの判定 (変更なし) ---
         for proc_name, keywords in PROCESS_KEYWORDS.items():
