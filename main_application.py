@@ -175,6 +175,15 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
                     if db_flag:
                         db_flag.set(True) 
                     # --- ▲▲▲ 追加ここまで ▲▲▲ ---
+                    # --- ▼▼▼【ここが修正箇所】▼▼▼ ---
+                    # 最初のDB書き込みが成功したら、検索ボタンを有効化するよう通知
+                    search_button = main_elements.get("search_button")
+                    # ボタンがまだ無効 (DISABLED) の場合のみ、有効化を依頼
+                    if search_button and str(search_button.cget('state')) == tk.DISABLED:
+                        q = main_elements.get("gui_queue")
+                        if q:
+                            q.put("ENABLE_SEARCH_BUTTON") # 検索ボタン有効化を依頼
+                    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
                 
             except Exception as e:
                 print(f"❌ データベース書き込み中にエラー発生: {e}")
@@ -675,11 +684,21 @@ def main():
                     except tk.TclError:
                         pass 
             
-            # 5. それ以外のメッセージ (スキャン途中経過など)
+            # 5. 【★ここに追加★】 検索ボタン有効化メッセージを処理
+            elif message == "ENABLE_SEARCH_BUTTON":
+                search_button = main_elements.get("search_button")
+                if search_button:
+                    try:
+                        if search_button.winfo_exists():
+                            search_button.config(state=tk.NORMAL)
+                            status_label.config(text="状態: DBにデータが保存されました。検索可能です。")
+                    except tk.TclError:
+                        pass
+            
+            # 6. それ以外のメッセージ (スキャン途中経過など)
             else:
                 status_label.config(text=message)
             # --- ▲▲▲ 修正ここまで ▲▲▲ ---
-                 
         except queue.Empty:
             pass
         finally:
