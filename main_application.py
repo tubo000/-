@@ -189,25 +189,44 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
         # --- ループ終了後の最終処理 ---
         if total_new_records_saved == 0:
             status_label.config(text="状態: 処理対象のメールがありませんでした。")
-            messagebox.showinfo("完了", "処理対象のメールがありませんでした。")
+            
+            # --- ▼▼▼【修正】ポップアップの代わりにキューに送る ▼▼▼ ---
+            q = main_elements.get("gui_queue")
+            if q:
+                q.put("EXTRACTION_NO_ITEMS_FOUND")
+            # --- ▲▲▲ 修正ここまで ▲▲▲ ---
             return # finally が実行される
 
-        messagebox.showinfo("完了", f"抽出処理が正常に完了し、\n合計 {total_new_records_saved} 件の新規レコードが '{DATABASE_NAME}' に保存されました。\n検索一覧ボタンを押して結果を確認してください。")
+        # --- ▼▼▼【修正】ポップアップの代わりにキューに送る ▼▼▼ ---
+        # (成功メッセージもキューに送る)
+        final_message = f"抽出処理が正常に完了し、\n合計 {total_new_records_saved} 件の新規レコードが '{DATABASE_NAME}' に保存されました。"
+        q = main_elements.get("gui_queue")
+        if q:
+            # 完了メッセージと件数を送る
+            q.put(f"EXTRACTION_COMPLETE:{total_new_records_saved}:{final_message}") 
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+
+        # (古い messagebox.showinfo は削除)
+        
         status_label.config(text=f"状態: 処理完了。{total_new_records_saved} 件保存済み。")
         search_button = main_elements.get("search_button")
         if search_button: search_button.config(state=tk.NORMAL)
         
     except Exception as e:
         status_label.config(text=f"状態: エラー発生 - {e}")
-        messagebox.showerror("エラー", f"抽出処理中に予期せぬエラーが発生しました。\n詳細: {e}")
+        # --- ▼▼▼【修正】エラーもキューに送る ▼▼▼ ---
+        error_message_for_user = f"抽出処理中に予期せぬエラーが発生しました。\n詳細: {e}"
+        q = main_elements.get("gui_queue")
+        if q:
+            q.put(f"EXTRACTION_ERROR:{error_message_for_user}")
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         traceback.print_exc()
         
     finally:
         q = main_elements.get("gui_queue")
         if q:
-            q.put("EXTRACTION_COMPLETE_ENABLE_BUTTON") 
+            q.put("EXTRACTION_COMPLETE_ENABLE_BUTTON") # ボタン有効化 (これは変更なし)
         
-        # print(f"[CHECKER] Thread {thread_id} (Extraction) CoUninitialize() CALLED.") # ログ削除
         pythoncom.CoUninitialize()
 # ----------------------------------------------------
 # 抽出ボタンコールバック (ボタン無効化)
@@ -613,17 +632,53 @@ def main():
         try:
             message = gui_queue.get(block=False)
             
-            if message == "EXTRACTION_COMPLETE_ENABLE_BUTTON":
+            # --- ▼▼▼【ここから修正】▼▼▼ ---
+            
+            # 1. 完了メッセージを処理
+            if message.startswith("EXTRACTION_COMPLETE:"):
+                try:
+                    parts = message.split(":", 2)
+                    total_saved = parts[1]
+                    final_message = parts[2]
+                    
+                    # アクティブなウィンドウを特定
+                    search_window = main_elements.get("search_window")
+                    active_parent = search_window if (search_window and search_window.winfo_exists()) else root
+                    
+                    messagebox.showinfo("完了", final_message, parent=active_parent)
+                    status_label.config(text=f"状態: 処理完了。{total_saved} 件保存済み。")
+                except Exception as e:
+                    print(f"完了メッセージの表示エラー: {e}")
+
+            # 2. 0件メッセージを処理
+            elif message == "EXTRACTION_NO_ITEMS_FOUND":
+                search_window = main_elements.get("search_window")
+                active_parent = search_window if (search_window and search_window.winfo_exists()) else root
+                messagebox.showinfo("完了", "処理対象のメールがありませんでした。", parent=active_parent)
+                status_label.config(text="状態: 処理対象のメールがありませんでした。")
+
+            # 3. エラーメッセージを処理
+            elif message.startswith("EXTRACTION_ERROR:"):
+                error_details = message.split(":", 1)[1]
+                search_window = main_elements.get("search_window")
+                active_parent = search_window if (search_window and search_window.winfo_exists()) else root
+                messagebox.showerror("エラー", error_details, parent=active_parent)
+                status_label.config(text="状態: エラー発生。")
+
+            # 4. ボタン有効化メッセージを処理
+            elif message == "EXTRACTION_COMPLETE_ENABLE_BUTTON":
                 run_button = main_elements.get("run_button")
                 if run_button:
                     try:
                         if run_button.winfo_exists():
                             run_button.config(state=tk.NORMAL)
-                            # print("INFO: 抽出実行ボタンを有効化しました (via Queue)。") # ログ削除
                     except tk.TclError:
                         pass 
+            
+            # 5. それ以外のメッセージ (スキャン途中経過など)
             else:
                 status_label.config(text=message)
+            # --- ▲▲▲ 修正ここまで ▲▲▲ ---
                  
         except queue.Empty:
             pass
@@ -684,20 +739,17 @@ def open_search_callback():
              except tk.TclError: pass
              return
         light_columns_sql = ", ".join([f'"{col}"' for col in light_columns])
-        query = f"SELECT {light_columns_sql} FROM emails"
-        # print(f"DEBUG: Loading light data with query: {query}") # ログ削除
+        # --- ▼▼▼【修正】SQLクエリに ORDER BY を追加 ▼▼▼ ---
+        query = f"SELECT {light_columns_sql} FROM emails ORDER BY \"受信日時\" DESC"
+        # print(f"DEBUG: Loading light data with query: {query}") # ログ
         df_for_gui = pd.read_sql_query(query, conn)
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         conn.close()
-        # --- ▼▼▼【ここにソートを追加】▼▼▼ ---
-        if not df_for_gui.empty and '受信日時' in df_for_gui.columns:
-            # print(f"DEBUG: ソート前の先頭受信日時: {df_for_gui.iloc[0]['受信日時']}") # ログ
-            # '受信日時' 列をdatetimeに変換 (エラーは無視)
-            df_for_gui['受信日時'] = pd.to_datetime(df_for_gui['受信日時'], errors='coerce')
-            # 降順 (新しい順) にソート
-            df_for_gui = df_for_gui.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
-            # print(f"DEBUG: ソート後の先頭受信日時: {df_for_gui.iloc[0]['受信日時']}") # ログ
-        # --- ▲▲▲ ソート追加ここまで ▲▲▲ ---
+        # --- ▼▼▼【削除】Pandas側でのソート処理を削除 ▼▼▼ ---
+        # if not df_for_gui.empty and '受信日時' in df_for_gui.columns:
+        #     df_for_gui['受信日時'] = pd.to_datetime(df_for_gui['受信日時'], errors='coerce')
+        #     df_for_gui = df_for_gui.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
+        # --- ▲▲▲ 削除ここまで ▲▲▲ ---
         # --- ▼▼▼【ここに追加/修正】(6行) ▼▼▼ ---
         # 1. これから開くウィンドウに「旗」を渡す
         db_flag = main_elements.get("db_has_new_data_var")
@@ -713,12 +765,21 @@ def open_search_callback():
             db_has_new_data_var=db_flag # ← ★ 引数に db_flag を追加 ★
         ) 
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+        # --- ▼▼▼【ここに追加】▼▼▼ ---
+        # どのウィンドウがアクティブか main_elements に記録
+        main_elements["search_window"] = search_app 
+        # --- ▲▲▲ 追加ここまで ▲▲▲ ---
+        
         search_app.wait_window() 
         
     except Exception as e:
         messagebox.showerror("検索ウィンドウ起動エラー", f"検索一覧の表示中に予期せぬエラーが発生しました。\n詳細: {e}")
         traceback.print_exc()
     finally:
+         # --- ▼▼▼【ここに追加】▼▼▼ ---
+         # 検索ウィンドウが閉じたら記録を消す
+         main_elements["search_window"] = None
+         # --- ▲▲▲ 追加ここまで ▲▲▲ ---
          try:
              if root and root.winfo_exists():
                   root.deiconify() 

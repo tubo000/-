@@ -705,17 +705,20 @@ class Screen2(ttk.Frame):
             self.id_entry.insert('end', id_value)
         except (ValueError, IndexError, tk.TclError):
             pass
-    # --- ▼▼▼【このメソッドを丸ごと追加】▼▼▼ ---
     # --- ▼▼▼【このメソッドを丸ごと置き換え】▼▼▼ ---
     def refresh_data_from_db(self):
         """
         データベースから最新の「軽量」データを再読み込みし、
-        ソート、フィルタリングして Treeview を更新する。
+        現在のフィルタを適用して Treeview を更新する。
         """
         
-        # print("\n" + "="*40) # ログ削除
-        # print("DEBUG: [Refresh] 「一覧更新」ボタンが押されました。")
-        
+        # --- ▼▼▼ 1. 更新前の件数を取得 ▼▼▼ ---
+        try:
+            previous_item_count = len(self.tree.get_children())
+        except:
+            previous_item_count = 0 # エラー時は0件
+        # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+
         if hasattr(self, 'btn_refresh'):
             self.btn_refresh.config(state=tk.DISABLED)
         self.master.update_idletasks()
@@ -740,32 +743,25 @@ class Screen2(ttk.Frame):
                      raise Exception("DBに列が見つかりません。")
                      
                 light_columns_sql = ", ".join([f'"{col}"' for col in light_columns])
-                query = f"SELECT {light_columns_sql} FROM emails"
-                
-                # print(f"DEBUG: [Refresh] DB読み込み実行: {query}")
-                
+                # --- ▼▼▼【修正】SQLクエリに ORDER BY を追加 ▼▼▼ ---
+                query = f"SELECT {light_columns_sql} FROM emails ORDER BY \"受信日時\" DESC"
                 new_df = pd.read_sql_query(query, conn)
+                # --- ▲▲▲ 修正ここまで ▲▲▲ ---
                 
             finally:
                 if conn: conn.close()
 
-            # print(f"DEBUG: [Refresh] DBから {len(new_df)} 件の軽量データを読み込みました。")
-
-            # --- ▼▼▼【修正】ここでソートを実行 ▼▼▼ ---
-            if not new_df.empty and '受信日時' in new_df.columns:
-                try:
-                    new_df['受信日時'] = pd.to_datetime(new_df['受信日時'], errors='coerce')
-                    new_df = new_df.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
-                    # print("DEBUG: [Refresh] 読み込みデータのソート完了。") 
-                except Exception as sort_err:
-                     print(f"警告: [Refresh] DB読み込み後のソート失敗: {sort_err}")
-            # --- ▲▲▲ ソート追加ここまで ▲▲▲ ---
-
+            # --- ▼▼▼【削除】Pandas側でのソート処理を削除 ▼▼▼ ---
+            # if not new_df.empty and '受信日時' in new_df.columns:
+            #     try:
+            #         new_df['受信日時'] = pd.to_datetime(new_df['受信日時'], errors='coerce')
+            #         new_df = new_df.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
+            #     except Exception as sort_err:
+            #          print(f"警告: [Refresh] DB読み込み後のソート失敗: {sort_err}")
+            # --- ▲▲▲ 削除ここまで ▲▲▲ ---
             # 5. App(self.master) のデータを更新
             self.master.df_all_skills = self.master._clean_data(new_df)
             
-            # print(f"DEBUG: [Refresh] 現在のフィルタキーワード: {self.master.keywords}")
-
             # 6. 現在のフィルタ(Appが保持)を再適用
             self.master.df_filtered_skills = filter_skillsheets(
                 self.master.df_all_skills, 
@@ -773,38 +769,40 @@ class Screen2(ttk.Frame):
                 self.master.range_data
             )
             
-            # print(f"DEBUG: [Refresh] フィルタ適用後の件数: {len(self.master.df_filtered_skills)} 件")
-            
             # 7. Treeview を再描画
             self.display_search_results()
+            
+            # --- ▼▼▼ 2. 更新後の件数を取得 ▼▼▼ ---
+            try:
+                current_item_count = len(self.tree.get_children())
+            except:
+                current_item_count = 0
+            # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
             
             # 8. 「旗」を倒す
             if self.master.db_has_new_data_var:
                 self.master.db_has_new_data_var.set(False)
 
-            # 9. 画面下のテキストエリアもクリアする
+            # --- ▼▼▼ 3. 表示メッセージを修正 ▼▼▼ ---
             self.body_text.config(state='normal') 
             self.body_text.delete(1.0, tk.END) 
-            self.body_text.insert(tk.END, f"一覧を更新しました。 (DB全件: {len(self.master.df_all_skills)} 件 / フィルタ後: {len(self.master.df_filtered_skills)} 件)")
+            self.body_text.insert(tk.END, f"一覧を更新しました。\n（表示件数: {previous_item_count} 件 → {current_item_count} 件）")
             self.body_text.config(state='disabled')
+            # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
             
-            # print("INFO: 検索一覧をDBから更新しました。")
+            print(f"INFO: 検索一覧をDBから更新しました。 (表示件数: {previous_item_count} -> {current_item_count})")
 
         except Exception as e:
             messagebox.showerror("更新エラー", f"一覧の更新中にエラーが発生しました。\n詳細: {e}")
             traceback.print_exc()
         finally:
-            # 10. ボタンを再度有効化
-            # (旗がFalseになったので、trace_add のコールバックで自動的に Disabled になる)
+            # 9. ボタンの状態は「旗」によって自動的に更新される
             if hasattr(self, 'btn_refresh'):
                 try:
                     if self.btn_refresh.winfo_exists():
-                        # self.btn_refresh.config(state=tk.NORMAL) # ← 不要
                         pass
                 except tk.TclError:
                     pass
-        
-        # print("="*40 + "\n")
     # --- ▲▲▲ 置き換えここまで ▲▲▲ ---
 
 # ==============================================================================

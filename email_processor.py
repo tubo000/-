@@ -359,7 +359,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
     
     processed_item_count = 0 
     batch_size = 300         
-    pause_duration = 10      # 10秒待機
+    pause_duration = 5      # 5秒待機
     gui_queue = main_elements.get("gui_queue") if main_elements else None
 
     try:
