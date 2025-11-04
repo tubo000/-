@@ -91,10 +91,11 @@ def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd
 
 class App(tk.Toplevel):
     # (変更なし)
-    def __init__(self, parent, data_frame: pd.DataFrame, open_email_callback):
+    def __init__(self, parent, data_frame: pd.DataFrame, open_email_callback, db_has_new_data_var: tk.BooleanVar):
         super().__init__(parent) 
         self.master = parent 
         self.open_email_callback = open_email_callback
+        self.db_has_new_data_var = db_has_new_data_var # ← ★ この行を追加 ★
         self.title("スキルシート検索アプリ")
         self.keywords = []      
         self.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}} 
@@ -381,9 +382,30 @@ class Screen2(ttk.Frame):
         )
         self.btn_attachment_content.grid(row=0, column=1, sticky='w') # .grid() に変更
         
-        self.btn_refresh = ttk.Button(button_frame, text="一覧更新", command=self.refresh_data_from_db)
-        self.btn_refresh.grid(row=0, column=2, sticky='w', padx=(10, 0)) # .grid() に変更
+        # --- ▼▼▼【ここに追加】(20行) ▼▼▼ ---
+        self.btn_refresh = ttk.Button(
+            button_frame, 
+            text="一覧更新", 
+            command=self.refresh_data_from_db,
+            state='disabled' # デフォルトは無効
+        )
+        self.btn_refresh.grid(row=0, column=2, sticky='w', padx=(10, 0))
         
+        # 「旗」の状態が変わったら、ボタンの状態も変えるように設定
+        if self.master.db_has_new_data_var:
+            def update_refresh_button_state(*args):
+                try:
+                    if self.master.db_has_new_data_var.get(): # 旗が True (更新あり) なら
+                        self.btn_refresh.config(state=tk.NORMAL) # ボタンを有効化
+                    else:
+                        self.btn_refresh.config(state=tk.DISABLED) # 旗が False (最新) なら
+                except tk.TclError:
+                    pass # ウィンドウが閉じた後など
+            
+            # 旗 (BooleanVar) の変更を監視
+            self.master.db_has_new_data_var.trace_add("write", update_refresh_button_state)
+            update_refresh_button_state() # 初期状態をセット
+        # --- ▲▲▲ 追加ここまで ▲▲▲ ---
         ttk.Button(button_frame, text="戻る (検索条件へ)", command=master.show_screen1
         ).grid(row=0, column=4, sticky='e', padx=10) # .grid() に変更
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
@@ -684,31 +706,31 @@ class Screen2(ttk.Frame):
         except (ValueError, IndexError, tk.TclError):
             pass
     # --- ▼▼▼【このメソッドを丸ごと追加】▼▼▼ ---
+    # --- ▼▼▼【このメソッドを丸ごと置き換え】▼▼▼ ---
     def refresh_data_from_db(self):
         """
         データベースから最新の「軽量」データを再読み込みし、
-        現在のフィルタを適用して Treeview を更新する。
+        ソート、フィルタリングして Treeview を更新する。
         """
-        # print("INFO: データベースから一覧を更新します...") # ログ
         
-        # 1. 更新ボタンを無効化
-        if hasattr(self, 'btn_refresh'): # ボタンが存在するか確認
+        # print("\n" + "="*40) # ログ削除
+        # print("DEBUG: [Refresh] 「一覧更新」ボタンが押されました。")
+        
+        if hasattr(self, 'btn_refresh'):
             self.btn_refresh.config(state=tk.DISABLED)
-        self.master.update_idletasks() # 無効状態をすぐに反映
+        self.master.update_idletasks()
 
         try:
-            # 2. DB接続
             db_path = os.path.abspath(DATABASE_NAME)
             if not os.path.exists(db_path):
                 raise FileNotFoundError(f"データベース {DATABASE_NAME} が見つかりません。")
             
             conn = None
-            new_df = pd.DataFrame() # 空のDFを準備
+            new_df = pd.DataFrame()
             try:
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
                 
-                # 3. 軽量読み込みクエリの準備 (main_application.py と同じロジック)
                 cursor.execute("PRAGMA table_info(emails)")
                 all_columns = [info[1] for info in cursor.fetchall()]
                 heavy_columns = ['本文(テキスト形式)', '本文(ファイル含む)']
@@ -720,45 +742,70 @@ class Screen2(ttk.Frame):
                 light_columns_sql = ", ".join([f'"{col}"' for col in light_columns])
                 query = f"SELECT {light_columns_sql} FROM emails"
                 
-                # 4. DBから軽量データを読み込み
+                # print(f"DEBUG: [Refresh] DB読み込み実行: {query}")
+                
                 new_df = pd.read_sql_query(query, conn)
                 
             finally:
                 if conn: conn.close()
 
+            # print(f"DEBUG: [Refresh] DBから {len(new_df)} 件の軽量データを読み込みました。")
+
+            # --- ▼▼▼【修正】ここでソートを実行 ▼▼▼ ---
+            if not new_df.empty and '受信日時' in new_df.columns:
+                try:
+                    new_df['受信日時'] = pd.to_datetime(new_df['受信日時'], errors='coerce')
+                    new_df = new_df.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
+                    # print("DEBUG: [Refresh] 読み込みデータのソート完了。") 
+                except Exception as sort_err:
+                     print(f"警告: [Refresh] DB読み込み後のソート失敗: {sort_err}")
+            # --- ▲▲▲ ソート追加ここまで ▲▲▲ ---
+
             # 5. App(self.master) のデータを更新
             self.master.df_all_skills = self.master._clean_data(new_df)
             
+            # print(f"DEBUG: [Refresh] 現在のフィルタキーワード: {self.master.keywords}")
+
             # 6. 現在のフィルタ(Appが保持)を再適用
             self.master.df_filtered_skills = filter_skillsheets(
                 self.master.df_all_skills, 
-                self.master.keywords,       # Appが保持している現在のキーワード
-                self.master.range_data      # Appが保持している現在の範囲指定
+                self.master.keywords,
+                self.master.range_data
             )
+            
+            # print(f"DEBUG: [Refresh] フィルタ適用後の件数: {len(self.master.df_filtered_skills)} 件")
             
             # 7. Treeview を再描画
             self.display_search_results()
             
-            # 8. 画面下のテキストエリアもクリアする (古い情報が残らないよう)
+            # 8. 「旗」を倒す
+            if self.master.db_has_new_data_var:
+                self.master.db_has_new_data_var.set(False)
+
+            # 9. 画面下のテキストエリアもクリアする
             self.body_text.config(state='normal') 
             self.body_text.delete(1.0, tk.END) 
-            self.body_text.insert(tk.END, "一覧を更新しました。")
+            self.body_text.insert(tk.END, f"一覧を更新しました。 (DB全件: {len(self.master.df_all_skills)} 件 / フィルタ後: {len(self.master.df_filtered_skills)} 件)")
             self.body_text.config(state='disabled')
             
-            print("INFO: 検索一覧をDBから更新しました。")
+            # print("INFO: 検索一覧をDBから更新しました。")
 
         except Exception as e:
             messagebox.showerror("更新エラー", f"一覧の更新中にエラーが発生しました。\n詳細: {e}")
             traceback.print_exc()
         finally:
-            # 9. ボタンを再度有効化
+            # 10. ボタンを再度有効化
+            # (旗がFalseになったので、trace_add のコールバックで自動的に Disabled になる)
             if hasattr(self, 'btn_refresh'):
                 try:
                     if self.btn_refresh.winfo_exists():
-                        self.btn_refresh.config(state=tk.NORMAL)
+                        # self.btn_refresh.config(state=tk.NORMAL) # ← 不要
+                        pass
                 except tk.TclError:
-                    pass # ウィンドウが閉じられた場合
-    # --- ▲▲▲ 新規追加ここまで ▲▲▲ ---
+                    pass
+        
+        # print("="*40 + "\n")
+    # --- ▲▲▲ 置き換えここまで ▲▲▲ ---
 
 # ==============================================================================
 # 4. 実行エントリポイント

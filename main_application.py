@@ -32,7 +32,6 @@ main_elements = {}
 # ----------------------------------------------------
 # ユーティリティ関数群 (Outlook連携、DF処理)
 # ----------------------------------------------------
-
 def open_outlook_email_by_id(entry_id: str):
     """Entry IDを使用してOutlookデスクトップアプリでメールを開く関数。（GUI版）"""
     if not entry_id:
@@ -170,6 +169,12 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
                     newly_saved_count = len(df_new)
                     total_new_records_saved += newly_saved_count # 総件数を加算
                     print(f"INFO: {newly_saved_count} 件の新規レコードをDBに追記しました。(累計: {total_new_records_saved} 件)")
+                    # --- ▼▼▼【ここに追加】(4行) ▼▼▼ ---
+                    # 「新しいデータがあるよ」という旗を立てる
+                    db_flag = main_elements.get("db_has_new_data_var")
+                    if db_flag:
+                        db_flag.set(True) 
+                    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
                 
             except Exception as e:
                 print(f"❌ データベース書き込み中にエラー発生: {e}")
@@ -462,7 +467,9 @@ def main():
     extract_days_var = tk.StringVar(value="1") 
     reset_category_var = tk.BooleanVar(value=False) 
     gui_queue = queue.Queue()
-    
+    # --- ▼▼▼【ここに追加】(2行) ▼▼▼ ---
+    db_has_new_data_var = tk.BooleanVar(value=False) # DBが更新されたかの「旗」
+    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     saved_account, saved_folder = utils.load_config_csv() 
     if not saved_folder: saved_folder = TARGET_FOLDER_PATH 
 
@@ -536,7 +543,10 @@ def main():
         "reset_category_var": reset_category_var, 
         "extract_days_var": extract_days_var,
         "run_button": run_button,
-        "gui_queue": gui_queue
+        "gui_queue": gui_queue,
+        # --- ▼▼▼【ここに追加】(1行) ▼▼▼ ---
+        "db_has_new_data_var": db_has_new_data_var
+        # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     }
     
     settings_button.config(command=open_settings_callback)
@@ -679,12 +689,30 @@ def open_search_callback():
         df_for_gui = pd.read_sql_query(query, conn)
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         conn.close()
+        # --- ▼▼▼【ここにソートを追加】▼▼▼ ---
+        if not df_for_gui.empty and '受信日時' in df_for_gui.columns:
+            # print(f"DEBUG: ソート前の先頭受信日時: {df_for_gui.iloc[0]['受信日時']}") # ログ
+            # '受信日時' 列をdatetimeに変換 (エラーは無視)
+            df_for_gui['受信日時'] = pd.to_datetime(df_for_gui['受信日時'], errors='coerce')
+            # 降順 (新しい順) にソート
+            df_for_gui = df_for_gui.sort_values(by='受信日時', ascending=False, na_position='last').reset_index(drop=True)
+            # print(f"DEBUG: ソート後の先頭受信日時: {df_for_gui.iloc[0]['受信日時']}") # ログ
+        # --- ▲▲▲ ソート追加ここまで ▲▲▲ ---
+        # --- ▼▼▼【ここに追加/修正】(6行) ▼▼▼ ---
+        # 1. これから開くウィンドウに「旗」を渡す
+        db_flag = main_elements.get("db_has_new_data_var")
+        
+        # 2. 「今から最新データで開く」ので、旗を False (更新なし) に倒す
+        if db_flag:
+            db_flag.set(False) 
 
         search_app = gui_search_window.App(
             root, 
             data_frame=df_for_gui,
-            open_email_callback=open_outlook_email_by_id 
+            open_email_callback=open_outlook_email_by_id,
+            db_has_new_data_var=db_flag # ← ★ 引数に db_flag を追加 ★
         ) 
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         search_app.wait_window() 
         
     except Exception as e:
