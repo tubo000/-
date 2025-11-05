@@ -1,5 +1,5 @@
 # email_processor.py (ログ出力削除・COM初期化削除版)
-
+#2025-11-05 11:00:00 更新
 import pandas as pd
 import win32com.client as win32
 import pythoncom
@@ -277,6 +277,13 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
     pause_duration = 3       # 3秒待機
     gui_queue = main_elements.get("gui_queue") if main_elements else None
 
+    # --- ▼▼▼【修正】中断フラグを取得 ▼▼▼ ---
+    stop_flag = main_elements.get("stop_extraction_flag") if main_elements else None
+    if stop_flag is None:
+        print("警告: 中断フラグが main_elements から取得できませんでした。")
+        # 停止できないダミーフラグを作成
+        stop_flag = threading.Event() 
+    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
     try:
         outlook_app = None
         try:
@@ -310,6 +317,11 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
         item = items.GetFirst()
 
         while item:
+            # --- ▼▼▼【修正】中断フラグをチェック ▼▼▼ ---
+            if stop_flag.is_set(): # もし True なら
+                print("INFO: ユーザーにより処理が中断されました。")
+                break # while ループを抜ける
+            # --- ▲▲▲ 修正ここまで ▲▲▲ ---
             if processed_item_count > 0 and processed_item_count % batch_size == 0:
                 status_message = f"状態: {processed_item_count}件スキャン完了。DB保存中..."
                 print(f"INFO: {status_message}")
@@ -489,7 +501,9 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
     except Exception as e:
         raise RuntimeError(f"Outlook操作エラー: {e}\n{traceback.format_exc()}")
     finally:
-        if data_records_batch or skip_ids_batch: 
+        # --- ループ終了後、残りのバッチを yield する ---
+        if (data_records_batch or skip_ids_batch) and (not stop_flag or not stop_flag.is_set()):
+             # 📌 修正: 中断されていない場合のみ、最後のバッチを返す
             print(f"INFO: 最後のバッチ (抽出:{len(data_records_batch)}件, スキップ:{len(skip_ids_batch)}件) を返します。")
             yield {
                 "data_batch": pd.DataFrame(data_records_batch),

@@ -1,4 +1,5 @@
 # main_application.py (バッチ処理・軽量化 最終版)
+#2025-11-05 11:00:00 更新
 import os
 import sys
 import pandas as pd
@@ -277,13 +278,19 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
 # ----------------------------------------------------
 def run_extraction_callback():
     run_button = main_elements.get("run_button")
+    stop_button = main_elements.get("stop_button") # ★ 中断ボタン取得
+    stop_flag = main_elements.get("stop_extraction_flag") # ★ 中断フラグ取得
     if run_button is None:
         print("警告: run_button が main_elements に見つかりません。") 
         return 
     if str(run_button.cget('state')) == tk.NORMAL:
-        run_button.config(state=tk.DISABLED)
+        run_button.config(state=tk.DISABLED)  # 実行ボタンを無効化
+        stop_button.config(state=tk.NORMAL)   # ★ 中断ボタンを有効化
+        stop_flag.clear()                     # ★ 中断フラグをリセット(Falseに)
+        
         run_extraction_thread(root, main_elements, main_elements["extract_days_var"])
-
+    else:
+        pass # 処理中
 def run_extraction_thread(root, main_elements, extract_days_var):
     account_email = main_elements["account_entry"].get().strip()
     folder_path = main_elements["folder_entry"].get().strip()
@@ -499,7 +506,33 @@ def main():
     root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
     
     def on_main_window_close():
-        root.destroy() 
+        # root.destroy() # ← すぐに終了（destroy）しない
+        
+        run_button = main_elements.get("run_button")
+        stop_flag = main_elements.get("stop_extraction_flag")
+        
+        is_running = False # 処理中かどうか
+        if run_button and str(run_button.cget('state')) == tk.DISABLED:
+            is_running = True
+            
+        if is_running and stop_flag:
+            # もし処理が実行中なら
+            print("INFO: ×ボタン検知。バックグラウンド処理に停止を要求します...")
+            status_label.config(text="状態: 終了処理中...バックグラウンド処理の完了を待っています。")
+            
+            # 1. 中断フラグを立てる
+            stop_flag.set()
+            
+            # 2. シャットダウン中フラグを立てる
+            main_elements["is_shutting_down"] = True
+            
+            # 3. GUIをまだ終了しない (check_queue が後で終了させる)
+            
+        else:
+            # 処理が実行中でなければ、すぐに終了する
+            print("INFO: 処理は実行されていません。すぐに終了します。")
+            root.destroy() 
+            
     root.protocol("WM_DELETE_WINDOW", on_main_window_close)
 
     delete_days_var = tk.StringVar(value="14") 
@@ -507,6 +540,11 @@ def main():
     # reset_category_var = tk.BooleanVar(value=False) # 📌 修正: 削除
     gui_queue = queue.Queue()
     db_has_new_data_var = tk.BooleanVar(value=False)
+
+    # --- ▼▼▼【ここに追加】(1行) ▼▼▼ ---
+    # スレッドを停止するためのフラグ
+    stop_extraction_flag = threading.Event() 
+    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     
     saved_account, saved_folder = utils.load_config_csv() 
     if not saved_folder: saved_folder = TARGET_FOLDER_PATH 
@@ -537,6 +575,9 @@ def main():
     process_frame.pack(padx=10, pady=10, fill='x')
     process_frame.grid_columnconfigure(0, weight=1)
     process_frame.grid_columnconfigure(1, weight=1)
+    # --- ▼▼▼【修正】中断ボタンを追加するため 2列目 も設定 ▼▼▼ ---
+    process_frame.grid_columnconfigure(2, weight=1) # 中断ボタン用
+    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
     days_frame = ttk.Frame(process_frame)
     days_frame.grid(row=0, column=0, columnspan=2, padx=5, pady=5, sticky='w')
     ttk.Label(days_frame, text="未処理メールの検索期間 (N日前まで):").pack(side=tk.LEFT)
@@ -547,7 +588,11 @@ def main():
     run_button.grid(row=1, column=0, padx=5, pady=5, sticky='ew')
     search_button = ttk.Button(process_frame, text="検索一覧 (結果表示)", state=tk.DISABLED)
     search_button.grid(row=1, column=1, padx=5, pady=5, sticky='ew')
-    
+    # --- ▼▼▼【ここに追加】(3行) ▼▼▼ ---
+    # 中断ボタン
+    stop_button = ttk.Button(process_frame, text="抽出中断", state=tk.DISABLED)
+    stop_button.grid(row=1, column=2, padx=5, pady=5, sticky='ew')
+    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     delete_frame = ttk.LabelFrame(main_frame, text="メール/レコード管理")
     delete_frame.pack(padx=10, pady=(10, 5), fill='x')
     delete_frame.grid_columnconfigure(0, weight=0)
@@ -591,6 +636,12 @@ def main():
     main_elements["run_button"] = run_button
     main_elements["gui_queue"] = gui_queue
     main_elements["db_has_new_data_var"] = db_has_new_data_var
+    main_elements["stop_extraction_flag"] = stop_extraction_flag # 既存の中断フラグ
+    main_elements["stop_button"] = stop_button               
+    
+    # --- ▼▼▼【ここに追加】(1行) ▼▼▼ ---
+    main_elements["is_shutting_down"] = False # ×ボタンが押されたかを示す旗
+    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     
     settings_button.config(command=open_settings_callback)
     run_button.config(command=run_extraction_callback)
@@ -598,7 +649,10 @@ def main():
     delete_button.config(command=lambda: run_deletion_thread(root, main_elements))
 
     output_file_abs_path = os.path.abspath(DATABASE_NAME) 
-    
+    # --- ▼▼▼【ここに追加】(2行) ▼▼▼ ---
+    # 中断ボタンのコールバックを設定
+    stop_button.config(command=lambda: stop_extraction_flag.set())
+    # --- ▲▲▲ 追加ここまで ▲▲▲ ---
     if os.path.exists(output_file_abs_path):
         search_button.config(state=tk.NORMAL)
         status_label.config(text="状態: 抽出結果ファイルあり。検索一覧が利用可能です。")
@@ -646,19 +700,33 @@ def main():
         finally:
              pythoncom.CoUninitialize()
              
+    # --- ▼▼▼【修正】check_queue にボタン制御を追加 ▼▼▼ ---
     def check_queue():
         try:
             message = gui_queue.get(block=False)
             
+            # --- ▼▼▼【ここを修正】 "EXTRACTION_COMPLETE_ENABLE_BUTTON" の処理 ▼▼▼ ---
             if message == "EXTRACTION_COMPLETE_ENABLE_BUTTON":
+                # 1. (通常処理) ボタンを有効化
                 run_button = main_elements.get("run_button")
                 if run_button:
                     try:
                         if run_button.winfo_exists():
                             run_button.config(state=tk.NORMAL)
-                    except tk.TclError:
-                        pass 
-            
+                    except tk.TclError: pass 
+                
+                stop_button = main_elements.get("stop_button")
+                if stop_button:
+                    try:
+                        if stop_button.winfo_exists():
+                            stop_button.config(state=tk.DISABLED)
+                    except tk.TclError: pass
+                    
+                # 2. (追加処理) シャットダウン中か確認
+                if main_elements.get("is_shutting_down") == True:
+                    print("INFO: バックグラウンド処理が安全に停止しました。ウィンドウを閉じます。")
+                    root.destroy() # ★ 安全に終了
+            # --- ▲▲▲ 修正ここまで ▲▲▲ ---
             elif message == "ENABLE_SEARCH_BUTTON":
                 search_button = main_elements.get("search_button")
                 if search_button:
@@ -703,6 +771,7 @@ def main():
             try:
                  if root and root.winfo_exists(): root.after(100, check_queue)
             except tk.TclError: pass
+    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
 
     initial_extract_days = None
     if "extract_days_var" in main_elements:
@@ -764,12 +833,15 @@ def open_search_callback():
         if db_flag:
             db_flag.set(False) 
 
+        # --- ▼▼▼【修正】引数に main_elements を追加 ▼▼▼ ---
         search_app = gui_search_window.App(
             root, 
+            main_elements, # ★ アプリの状態を丸ごと渡す
             data_frame=df_for_gui,
             open_email_callback=open_outlook_email_by_id,
             db_has_new_data_var=db_flag 
         ) 
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         
         main_elements["search_window"] = search_app 
         
@@ -781,8 +853,9 @@ def open_search_callback():
     finally:
          main_elements["search_window"] = None 
          try:
-             if root and root.winfo_exists():
-                  root.deiconify() 
+             # 📌 修正: シャットダウン中でなければメインウィンドウを再表示
+             if root and root.winfo_exists() and not main_elements.get("is_shutting_down", False):
+                  root.deiconify()
          except tk.TclError:
               pass 
          except Exception as e_final:

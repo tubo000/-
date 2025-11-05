@@ -91,11 +91,14 @@ def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd
 
 class App(tk.Toplevel):
     # (変更なし)
-    def __init__(self, parent, data_frame: pd.DataFrame, open_email_callback, db_has_new_data_var: tk.BooleanVar):
+    # --- ▼▼▼【修正】引数に main_elements を追加 ▼▼▼ ---
+    def __init__(self, parent, main_elements: dict, data_frame: pd.DataFrame, open_email_callback, db_has_new_data_var: tk.BooleanVar):
         super().__init__(parent) 
         self.master = parent 
+        self.main_elements = main_elements # ★ main_elements を保存
         self.open_email_callback = open_email_callback
-        self.db_has_new_data_var = db_has_new_data_var # ← ★ この行を追加 ★
+        self.db_has_new_data_var = db_has_new_data_var
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         self.title("スキルシート検索アプリ")
         self.keywords = []      
         self.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}} 
@@ -127,12 +130,40 @@ class App(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_closing) 
         #self.grab_set()
 
+# --- ▼▼▼【修正】「×」ボタンの処理を安全な終了に変更 ▼▼▼ ---
     def on_closing(self):
+        """「×」ボタンが押されたときの安全な終了処理"""
         self.grab_release() 
-        try: self.master.destroy() 
-        except tk.TclError: pass 
-        try: self.destroy()
-        except tk.TclError: pass
+        
+        run_button = self.main_elements.get("run_button")
+        stop_flag = self.main_elements.get("stop_extraction_flag")
+        
+        is_running = False # 処理中かどうか
+        if run_button and str(run_button.cget('state')) == tk.DISABLED:
+            is_running = True
+            
+        if is_running and stop_flag:
+            # もし処理が実行中なら
+            print("INFO: 検索一覧の×ボタン検知。バックグラウンド処理に停止を要求します...")
+            
+            # 1. 中断フラグを立てる
+            stop_flag.set()
+            
+            # 2. シャットダウン中フラグを立てる
+            self.main_elements["is_shutting_down"] = True
+            
+            # 3. 検索一覧ウィンドウだけを閉じる (メインウィンドウは閉じない)
+            try: self.destroy()
+            except tk.TclError: pass
+            
+        else:
+            # 処理が実行中でなければ、アプリ全体を終了する
+            print("INFO: 処理は実行されていません。アプリ全体を終了します。")
+            try: self.master.destroy() # メインウィンドウを閉じる
+            except tk.TclError: pass 
+            try: self.destroy()
+            except tk.TclError: pass
+    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
             
     def on_return_to_main(self):
         self.grab_release()
