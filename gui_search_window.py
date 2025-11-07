@@ -5,7 +5,9 @@ from tkinter import ttk
 from tkinter import messagebox
 import pandas as pd
 from typing import List
+import numpy as np
 import os
+import re
 import sqlite3 # 📌 DB接続のために追加
 from config import DATABASE_NAME # 📌 DB名を取得するために追加
 import traceback # ← ★★★ この行を追加 ★★★
@@ -54,7 +56,7 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
 
     # C++ / C言語
     'vc++': 'C++', 'stl': 'C++', 'boost': 'C++', 
-    'ansi c': 'C言語', 'embedded c': 'C言語', 'posix': 'C言語',
+    'ansi c': 'C言語', 'embedded c': 'C言語', 'posix': 'C言語', 'C':'C言語', 'c':'C言語',
 
     # PHP / Ruby / Go / Mobile
     'laravel': 'PHP', 'symfony': 'PHP', 'cakephp': 'PHP',
@@ -195,52 +197,185 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
 
 
 def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd.DataFrame:
-    # (変更なし)
+    
     if df.empty: return df 
+    
+    # 1. キーワードフィルタリングを最初に実行（必要に応じてコメントを外す）
+    # df_filtered = filter_skillsheets_by_keywords(df.copy(), keywords)
     df_filtered = df.copy()
-    df_filtered = filter_skillsheets_by_keywords(df_filtered, keywords)
+    
     if df_filtered.empty: return df_filtered
+    
     for key, limits in range_data.items():
-        lower = limits['lower']
-        upper = limits['upper']
+        lower = limits.get('lower')
+        upper = limits.get('upper')
+        
         if not lower and not upper: continue
+
+        # 【★全範囲共通の正規化ロジック★】入力値の自動入れ替え（60～45 -> 45～60）とエラー捕捉
+        try:
+            # 数字と小数点のみを抽出し、floatに変換して比較する
+            val_lower = float(re.sub(r'[^0-9.]', '', str(lower))) if lower else -float('inf')
+            val_upper = float(re.sub(r'[^0-9.]', '', str(upper))) if upper else float('inf')
+
+            # 下限 > 上限 の場合、値を入れ替える
+            if val_lower != -float('inf') and val_upper != float('inf') and val_lower > val_upper:
+                limits['lower'], limits['upper'] = str(upper), str(lower)
+                # 新しい値を反映させる
+                lower = limits.get('lower')
+                upper = limits.get('upper')
+                
+        except (ValueError, TypeError) as e:
+            # 数字変換でエラーが出た場合は、その範囲フィルタリングをスキップ
+            print(f"🚨 範囲フィルタリングエラー (キー: {key})：入力値 '{lower}' または '{upper}' が無効な数値形式です。フィルタリングをスキップします。{e}")
+            continue
+        # ----------------------------------------
+        
         col_name = {'age': '年齢', 'price': '単価', 'start': '実働開始'}.get(key)
         
         if col_name not in df_filtered.columns: continue
 
-        if col_name in ['年齢', '単価']:
+        # --- 年齢 (範囲内を優先、NaNを最後に、並び順確定) ---
+        if col_name == '年齢':
             try:
+                # 【★エラー表示強化★】年齢は純粋な数字のみを要求
+                if lower and not str(lower).isdigit():
+                    raise ValueError(f"'{col_name}'の下限値は純粋な数字である必要があります。入力値: {lower}")
+                if upper and not str(upper).isdigit():
+                    raise ValueError(f"'{col_name}'の上限値は純粋な数字である必要があります。入力値: {upper}")
+
+                # lower, upperは既に正規化済み
+                search_lower = int(lower) if lower else -float('inf')
+                search_upper = int(upper) if upper else float('inf')
+                
                 col = df_filtered[col_name]
                 col_numeric = pd.to_numeric(col, errors='coerce') 
-                is_not_nan = col_numeric.notna()
-                min_val = col_numeric.min() if is_not_nan.any() else 0
-                max_val = col_numeric.max() if is_not_nan.any() else float('inf')
-                lower_val = int(lower) if lower and str(lower).isdigit() else min_val
-                upper_val = int(upper) if upper and str(upper).isdigit() else max_val
-                valid_range_filter = is_not_nan & (col_numeric >= lower_val) & (col_numeric <= upper_val)
-                df_filtered = df_filtered[valid_range_filter]
+                
+                is_nan = col_numeric.isna()
+                df_nan = df_filtered[is_nan]
+                df_target = df_filtered[~is_nan].copy()
+
+                if df_target.empty:
+                    df_filtered = df_nan
+                    continue
+                
+                col_numeric_target = col_numeric[~is_nan]
+                
+                range_condition = (col_numeric_target >= search_lower) & (col_numeric_target <= search_upper)
+                
+                df_filtered_target = df_target[range_condition]
+                
+                df_filtered = pd.concat([df_filtered_target, df_nan], ignore_index=True)
+                df_filtered = df_filtered.reset_index(drop=True)
+                
+            except Exception as e:
+                print(f"🚨 フィルタリングエラー: '{col_name}' - {e}")
+                continue
+                
+        # --- 単価 (①完全内包[範囲] → ②完全内包[単独] → ③部分重複 → ④NaN の順で並び替え、並び順確定) ---
+        elif col_name == '単価':
+            try:
+                col = df_filtered[col_name]
+                
+                # --- 検索範囲 [Ls, Us] の定義 ---
+                Ls = int(lower) if lower and str(lower).isdigit() else -float('inf')
+                Us = int(upper) if upper and str(upper).isdigit() else float('inf')
+
+                # ... (単価解析ロジックは省略 - 内部ロジックは変更なし) ...
+                col_str = col.astype(str).str.strip()
+                col_str_normalized = col_str.str.replace('〜|～|－|~', '-', regex=True)
+                is_pd_nan = col.isna() 
+                is_str_nan = col_str.str.lower() == 'nan'
+                is_original_nan = is_pd_nan | is_str_nan
+                parts = col_str_normalized.str.split('-', expand=True)
+                Ld_raw = pd.to_numeric(parts[0].str.replace(r'[^0-9]', '', regex=True), errors='coerce')
+                Ud_raw = pd.to_numeric(parts.get(1, pd.Series(np.nan, index=parts.index)).str.replace(r'[^0-9]', '', regex=True), errors='coerce')
+                is_single_value = Ud_raw.isna() & Ld_raw.notna()
+                Ud_raw = Ud_raw.fillna(Ld_raw[is_single_value])
+                is_parse_error_nan = Ld_raw.isna() & Ud_raw.isna()
+                is_nan_condition = is_original_nan | is_parse_error_nan
+                df_group3 = df_filtered[is_nan_condition]
+                df_target = df_filtered[~is_nan_condition].copy() 
+                if df_target.empty:
+                    df_filtered = df_group3
+                    continue
+                target_index = df_target.index
+                Ld = Ld_raw.loc[target_index]
+                Ud = Ud_raw.loc[target_index]
+                Ld_filled = Ld.fillna(-float('inf'))
+                Ud_filled = Ud.fillna(float('inf'))
+
+                cond_overlap = (Ld_filled <= float(Us)) & (Ud_filled >= float(Ls))
+                cond_contained = (Ld_filled >= float(Ls)) & (Ud_filled <= float(Us))
+                df_target_overlap = df_target[cond_overlap]
+                if df_target_overlap.empty:
+                    df_filtered = df_group3
+                    continue
+                cond_contained_overlap = cond_contained[df_target_overlap.index]
+
+                df_group1_original = df_target_overlap[cond_contained_overlap]
+                df_group2 = df_target_overlap[~cond_contained_overlap]
+
+                idx_g1 = df_group1_original.index
+                Ld_g1 = Ld_raw.loc[idx_g1]
+                Ud_g1 = Ud_raw.loc[idx_g1]
+                
+                cond_range = (Ld_g1 != Ud_g1)
+                df_group1A = df_group1_original[cond_range] 
+                cond_single = (Ld_g1 == Ud_g1)
+                df_group1B = df_group1_original[cond_single] 
+                
+                df_filtered = pd.concat([df_group1A, df_group1B, df_group2, df_group3], ignore_index=True)
+                df_filtered = df_filtered.reset_index(drop=True)
+
             except Exception as e:
                 print(f"🚨 データ型エラー: '{col_name}'の入力値またはデータが無効です。{e}")
                 continue
-                
+
+        # --- 実働開始 (期間内の数字 → 即日 → NaN の順に表示を固定、並び順確定) ---
         elif key == 'start' and '実働開始' in df_filtered.columns:
+            
             start_col = df_filtered['実働開始']
-            is_nan_or_nat = pd.to_datetime(start_col, errors='coerce').isna()
-            df_target = df_filtered[~is_nan_or_nat].copy()
-            if df_target.empty:
-                 df_filtered = df_target
-                 continue 
-            start_col_target_str = df_target['実働開始'].astype(str).str.replace(r'[^0-9]', '', regex=True)
-            filter_condition = pd.Series([True] * len(df_target), index=df_target.index)
+            start_col_str = start_col.astype(str).str.strip()
+            
+            # ... (実働開始解析ロジックは省略 - 内部ロジックは変更なし) ...
+            is_sokujitsu = start_col_str.isin(["即日", "即"])
+            is_pd_nan = start_col.isna()
+            is_str_nan = start_col_str.str.lower() == 'nan'
+            is_non_date_base = is_pd_nan | is_str_nan | (start_col_str == "")
+            is_date_candidate = ~is_sokujitsu & ~is_non_date_base
+            df_date_candidate = df_filtered[is_date_candidate].copy()
+            start_col_candidate = df_date_candidate['実働開始']
+            date_series = pd.to_datetime(start_col_candidate, format='%Y%m', errors='coerce')
+            is_nat_in_candidate = date_series.isna()
+            is_nan_condition = is_non_date_base.copy() 
+            is_nan_condition.loc[is_nat_in_candidate.index] = is_nat_in_candidate
+            df_nan = df_filtered[is_nan_condition]
+            df_sokujitsu = df_filtered[is_sokujitsu & (~is_nan_condition)]
+            is_target_condition = is_date_candidate
+            df_target = df_filtered[is_target_condition].copy() 
+            if df_target.empty and df_sokujitsu.empty:
+                df_filtered = df_nan
+                continue 
+
+            start_col_prepared = df_target['実働開始'].astype(str)
+            start_col_target_str = start_col_prepared.str.replace(r'[^0-9]', '', regex=True)
+            filter_condition = pd.Series(True, index=df_target.index)
+            
             if lower: 
-                lower_norm = str(lower).replace(r'[^0-9]', '', regex=True)
+                lower_norm = re.sub(r'[^0-9]', '', str(lower))
                 filter_condition = filter_condition & (start_col_target_str >= lower_norm)
             if upper:
-                upper_norm = str(upper).replace(r'[^0-9]', '', regex=True)
+                upper_norm = re.sub(r'[^0-9]', '', str(upper))
                 filter_condition = filter_condition & (start_col_target_str <= upper_norm)
-            df_filtered = df_target[filter_condition]
             
-    return df_filtered
+            df_filtered_target = df_target[filter_condition]
+
+            df_filtered = pd.concat([df_filtered_target, df_sokujitsu, df_nan], ignore_index=True)
+            df_filtered = df_filtered.reset_index(drop=True)
+            
+    # すべてのフィルタリングが終わった後、最終結果の並び順を確定させて返却する
+    return df_filtered.reset_index(drop=True)
 
 
 
@@ -410,6 +545,32 @@ class App(tk.Toplevel):
         self.current_frame = self.screen2
         self.current_frame.grid(row=0, column=0, sticky='nsew')
 
+        if self.db_has_new_data_var and self.db_has_new_data_var.get():
+            print("INFO: 新規データを検出。Screen2表示時に自動で一覧を更新します...")
+            # 画面が描画されるのを少し待ってから自動更新を実行
+            self.after(100, self.auto_refresh_on_startup)
+        # ★★★ 修正ここまで ★★★
+ 
+ 
+    # ★★★ このメソッドを App クラス内に「追加」 ★★★
+    def auto_refresh_on_startup(self):
+        """起動時の自動更新処理 (show_screen2 から呼ばれる)"""
+        try:
+            # 現在の画面が Screen2 であることを確認
+            if self.current_frame and isinstance(self.current_frame, Screen2):
+                # Screen2 の refresh_data_from_db メソッドを直接呼び出す
+                print("DEBUG: auto_refresh_on_startup が refresh_data_from_db を呼び出します。")
+                self.current_frame.refresh_data_from_db()
+            elif self.screen2:
+                # current_frame が設定されるのが遅れる場合も想定
+                print("DEBUG: auto_refresh_on_startup (fallback) が refresh_data_from_db を呼び出します。")
+                self.screen2.refresh_data_from_db()
+            else:
+                print("WARN: 自動更新を試みましたが、Screen2 が見つかりません。")
+        except Exception as e:
+            print(f"ERROR: 起動時の自動更新に失敗しました: {e}")
+            traceback.print_exc()
+
 
 # ==============================================================================
 # 2. 画面1: 検索条件の入力
@@ -550,7 +711,13 @@ class Screen2(ttk.Frame):
         self.id_entry.grid(row = 4,column=0, padx=10, pady=5, sticky='ew')
         ttk.Button(self, text="Outlookで開く", command=self.open_email_from_entry).grid(row=4, column=1, padx=10, pady=5, sticky='e')
 
-        self.setup_treeview() # 修正あり
+        self.setup_treeview() 
+        
+        # --- ▼▼▼【修正】初期ソート順を True (降順) から False (昇順) に変更 ▼▼▼ ---
+        self.sort_column = '受信日時' # 初期ソート列
+        self.sort_reverse = False     # 初期ソート順 (False=昇順, True=降順)
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+        
         self.display_search_results()
         
         # --- ▼▼▼【ここから修正】ボタンフレームのレイアウトを .grid() に変更 ▼▼▼ ---
@@ -798,7 +965,7 @@ class Screen2(ttk.Frame):
              cols_available = self.master.df_all_skills.columns.tolist()
              
              # 📌 修正: 'Attachments' を表示対象ベースリストに追加
-             cols_to_display_base = ['受信日時', '件名', 'スキル', 'ポジション', 'OS', '年齢', '単価', '実働開始', 'Attachments'] 
+             cols_to_display_base = ['受信日時', '件名', 'スキル', 'ポジション', 'OS', '年齢', '単価', '実働開始', 'Attachments']
              
              cols_to_display = [col for col in cols_to_display_base if col in cols_available]
              all_columns = ['ENTRY_ID'] + cols_to_display
@@ -810,10 +977,12 @@ class Screen2(ttk.Frame):
         
         for col in cols_to_display:
             self.tree.heading(col, text=col)
-            width_val = 100
-            if col in ['年齢', '単価']: width_val = 40
-            elif col in ['実働開始']: width_val = 50
-            elif col in ['スキル','件名', 'ポジション', 'OS']: width_val = 150
+            width_val = 100, 
+            if col in ['年齢']: width_val = 40
+            elif col in ['単価']: width_val = 50
+            elif col in ['ポジション']: width_val = 80
+            elif col in ['実働開始']: width_val = 100
+            elif col in ['スキル','件名', 'OS']: width_val = 120
             elif col == '受信日時': width_val = 80
             
             # 📌 修正: 'Attachments' 列を非表示にする
