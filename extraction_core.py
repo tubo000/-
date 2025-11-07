@@ -5,7 +5,7 @@ import pandas as pd
 import re
 import math # 単金処理のためにmathをインポート
 import datetime             # 💡 追加: 日付処理用
-from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS
+from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS,SKILL_LANGUAGE_PATTERNS,POSITION_PATTERNS,OS_PATTERNS
 # 📌 修正1: configから高度な抽出ロジックの正規表現をインポート
 from config import RE_AGE_PATTERNS, RE_TANAKA_KW_PATTERNS, RE_TANAKA_RAW_PATTERNS, KEYWORD_TANAKA
 
@@ -531,6 +531,81 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
                 if score > current_score:
                     extracted_data[base_item_name] = cleaned_val
                     reliability_scores[base_item_name] = score
+
+            # --- 2.5. スキル・言語の抽出 (新規追加) ---
+        extracted_skills = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for skill_name, patterns in SKILL_LANGUAGE_PATTERNS.items():
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_skills.add(skill_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_skills:
+            extracted_data['スキルor言語'] = ", ".join(sorted(list(extracted_skills)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['スキルor言語'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
+
+        # --- 2.6. ポジションの抽出 (新規追加) ---
+        extracted_position = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for position_name, patterns in POSITION_PATTERNS.items():
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_position.add(position_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_position:
+            extracted_data['ポジション'] = ", ".join(sorted(list(extracted_position)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['ポジション'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
+
+        # --- 2.7. OSの抽出 (新規追加) ---
+        extracted_OS = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for OS_name, patterns in OS_PATTERNS.items():
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_OS.add(OS_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_OS:
+            extracted_data['OS'] = ", ".join(sorted(list(extracted_OS)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['OS'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
             
         # --- 3. 開発工程フラグの判定 (変更なし) ---
         for proc_name, keywords in PROCESS_KEYWORDS.items():
@@ -565,8 +640,8 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
         
     all_cols_in_order = [
         'EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 
-        'Attachments', '信頼度スコア'
-    ] + [col for col in MASTER_COLUMNS if col not in ['EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments', '信頼度スコア', '本文(抽出元結合)']]
+        'Attachments', '信頼度スコア','ポジション'
+    ] + [col for col in MASTER_COLUMNS if col not in ['EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments', '信頼度スコア','ポジション', '本文(抽出元結合)']]
     
     df_extracted = df_extracted.reindex(columns=[c for c in all_cols_in_order if c in df_extracted.columns], fill_value='N/A')
     df_extracted = df_extracted.astype(str)
