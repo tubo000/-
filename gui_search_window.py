@@ -779,6 +779,27 @@ class Screen2(ttk.Frame):
         #本文の文字の大きさの変更はFONTの後を変更する
         self.body_text = tk.Text(self, wrap='word', height=10, state='disabled',font=('Meiryo', 12))
         self.body_text.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='nsew')
+        if hasattr(self, 'tree'):
+            self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
+        
+        # 📌 追記: 初期ロード時にボタンの状態をチェック
+        self.master.after(100, self._update_debug_button_state)
+
+    def on_tree_select(self, event):
+        """Treeviewの項目が選択されたときに呼び出される"""
+        selected_items = self.tree.selection()
+        if selected_items:
+            item_id = selected_items[0]
+            # 本文表示処理 (既存ロジックをここに記述)
+            
+            # 添付ファイルボタンの状態を更新 (既存ロジック)
+            self.check_attachment_content(item_id)
+        else:
+            # 選択解除された場合、添付ファイルボタンを無効化
+            self.btn_attachment_content.config(state='disabled')
+            
+        # 📌 追記: 選択状態が変更された後、デバッグボタンの状態を更新
+        self._update_debug_button_state()
 
 
     def open_email_from_entry(self):
@@ -830,6 +851,23 @@ class Screen2(ttk.Frame):
         else:
             self.btn_attachment_content.config(state='disabled') 
     # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+
+    def _update_debug_button_state(self):
+        """
+        キーワードリストに値があり、かつTreeviewで項目が選択されている場合のみ、
+        キーワードヒット箇所表示ボタンを有効にする。
+        """
+        has_keywords = bool(self.master.keywords)
+        is_item_selected = bool(self.tree.selection())
+
+        if has_keywords and is_item_selected:
+            # 両方の条件を満たした場合、ボタンを有効化
+            self.btn_debug_body.config(state='normal')
+            print("DEBUG: キーワードヒット箇所表示ボタンを有効化しました。")
+        else:
+            # どちらかの条件を満たさない場合、ボタンを無効化
+            self.btn_debug_body.config(state='disabled')
+            print(f"DEBUG: キーワードヒット箇所表示ボタンを無効化しました (Keywords: {has_keywords}, Selected: {is_item_selected})")
 
     def _debug_keyword_extraction(self, entry_id, col_name, text_content):
         """
@@ -1037,6 +1075,50 @@ class Screen2(ttk.Frame):
         self.body_text.config(state='disabled')
         print("DEBUG: 両方の本文デバッグ情報の表示が完了しました。")
 
+    def apply_highlights(self, keywords: List[str]):
+        """
+        Textウィジェットに表示された全文に対して、キーワードのハイライトを非同期で適用する
+        """
+        if not keywords:
+            return # キーワードがなければ何もしない
+        try:
+            self.body_text.config(state='normal')
+                        # 既存のハイライトをすべて削除            
+            self.body_text.tag_remove("highlight", 1.0, tk.END)
+                        # ハイライト用のタグを定義 (まだなければ)
+            if "highlight" not in self.body_text.tag_names():
+                self.body_text.tag_configure(                    "highlight", 
+                    background="yellow", 
+                    foreground="black"                )
+            # print(f"INFO: ハイライト処理を開始... (キーワード: {keywords})")# ウィジェットから全文を取得 (これは軽い)            
+            full_text = self.body_text.get(1.0, tk.END)
+            if not full_text:
+                self.body_text.config(state='disabled')
+                return
+            full_text_lower = full_text.lower() # 検索用に小文字化
+            for kw in keywords:
+                if not kw.strip():
+                    continue                                
+                kw_lower = kw.lower()                
+                start_index = 0# ★ re.finditer ではなく、単純な .find() ループの方が高速な場合があるwhile True:
+                    # .find() で次の一致箇所を探す
+                start_index = full_text_lower.find(kw_lower, start_index)
+                if start_index == -1:
+                    break # 見つからなければループ終了
+                    
+                end_index = start_index + len(kw_lower)
+                    
+                # tk.Textのインデックス形式 (例: "1.0", "1.15") に変換
+                start_tk_index = f"1.0 + {start_index} chars"
+                end_tk_index = f"1.0 + {end_index} chars"# ハイライトタグを適用
+                self.body_text.tag_add("highlight", start_tk_index, end_tk_index)
+                    
+                start_index = end_index # 次の検索開始位置を更新except Exception as e:
+            
+        finally:
+            self.body_text.config(state='disabled')
+                # print("INFO: ハイライト処理完了。")
+
     def update_display_area(self, content_type: str):
         # (変更なし - DBオンデマンド読み込み)
         selected_items = self.tree.selection()
@@ -1084,9 +1166,13 @@ class Screen2(ttk.Frame):
                     full_data = row[0]
                     if pd.notna(full_data) and str(full_data).strip() != '':
                         full_text_content = str(full_data).replace('_x000D_', '\n')
-                        display_text = full_text_content[:1000]
-                        if len(full_text_content) > 1000:
-                            display_text += "...\n\n[--- 1000文字以降は省略 ---]"
+                        # 以下の2行を削除または変更して、省略せずに全文を display_text に格納する
+                        display_text = full_text_content
+                        
+                        # 元のコードにあった1000文字の切り捨てと省略メッセージを追加する処理を削除
+                        # if len(full_text_content) > 1000:
+                        #     display_text += "...\n\n[--- 1000文字以降は省略 ---]"
+                            
                         self._debug_keyword_extraction(entry_id, content_type, full_text_content)
                     else:
                         display_text = f"{content_type} のデータが空です。"
@@ -1097,14 +1183,18 @@ class Screen2(ttk.Frame):
                  display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
             finally:
                 if conn: conn.close()
-        except (ValueError, IndexError, FileNotFoundError) as e:
-            display_text = f"データ取得エラー: {e}"
-            print(f"update_display_area でエラー: {e}") 
 
-        self.body_text.config(state='normal') 
-        self.body_text.delete(1.0, tk.END) 
-        self.body_text.insert(tk.END, display_text)
-        self.body_text.config(state='disabled')
+            self.body_text.config(state='normal') 
+            self.body_text.delete(1.0, tk.END) 
+            self.body_text.insert(tk.END, full_text_content)
+            self.body_text.config(state='disabled')
+        except Exception as e:
+            print(f"ERROR: テキストの挿入に失敗: {e}")
+            self.body_text.config(state='disabled')
+            return# ★ 2. ハイライト処理を「遅延実行」させる ★# (これにより、まず全文が表示され、一瞬遅れてハイライトが適用される)
+        keywords_to_highlight = self.master.keywords
+        if keywords_to_highlight: # キーワードがある場合のみハイライト処理を予約
+            self.after(50, lambda: self.apply_highlights(keywords_to_highlight))
         
     def draw_tags(self):
         # (変更なし)
@@ -1152,6 +1242,25 @@ class Screen2(ttk.Frame):
 
         if hasattr(self, 'reset_sort_status'):
             self.reset_sort_status()
+            
+        # 📌 追記: キーワードが更新された後、デバッグボタンの状態を更新
+        self._update_debug_button_state()
+
+    def _update_debug_button_state(self):
+        """
+        キーワードリストに値があり、かつTreeviewで項目が選択されている場合のみ、
+        キーワードヒット箇所表示ボタンを有効にする。
+        """
+        # self.master.keywords が存在しない場合のフォールバックを追加
+        has_keywords = bool(getattr(self.master, 'keywords', [])) 
+        is_item_selected = bool(self.tree.selection())
+
+        if has_keywords and is_item_selected:
+            self.btn_debug_body.config(state='normal')
+            print("DEBUG: キーワードヒット箇所表示ボタンを有効化しました。")
+        else:
+            self.btn_debug_body.config(state='disabled')
+            print(f"DEBUG: キーワードヒット箇所表示ボタンを無効化しました (Keywords: {has_keywords}, Selected: {is_item_selected})")
         
     # --- ▼▼▼ 修正: バグ2対応 (setup_treeview) ▼▼▼ ---
     def setup_treeview(self):
