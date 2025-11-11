@@ -91,26 +91,24 @@ KEYWORD_MAPPING = {
     'jira': 'Task_Mgt', 'backlog': 'Task_Mgt', 'trello': 'Task_Mgt', 'redmine': 'Task_Mgt',
     }
 
+KEYWORD_MAPPING = {} # 仮の定義
+
 def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
     """
-    キーワードに基づいて3段階の優先順位で検索を実行し、結果を結合して返す。
-
-    優先度1: ポジション列での完全一致 (最優先)
-    優先度2: ポジション, スキル, OSでの高精度検索
-    優先度3: 本文, 件名での広範囲検索
+    キーワードに基づいて検索を実行する。
+    
+    変更点:
+    - キーワードが1つのみの場合、ポジション列での完全一致検索 (最優先) を行い、
+      結果があればそれのみを返す。
+    - 完全一致検索のロジックは、str.lower() == lower_keyword を使用する。
     """
     if df.empty or not keywords: 
         return df
 
     # 検索対象列の定義
     PRIORITY_COLS = ['ポジション'] 
-    HIGH_PRECISION_COLS = ['ポジション', 'スキル', 'OS']
-    BROAD_RANGE_COLS = ['本文(テキスト形式)', '本文(ファイル含む)', '件名']
     
-    # 全てのキーワードのリストを小文字で準備
-    lower_keywords = [kw.lower().strip() for kw in keywords if kw.strip()]
-    if not lower_keywords: 
-        return df
+    # 全てのキーワードのリストを小文字で準備し、略語置換を実行
     processed_keywords = []
     
     for kw in keywords:
@@ -136,7 +134,38 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
     if not lower_keywords: 
         return df
 
-    # --- ヘルパー関数: 指定カラムでAND検索を実行 ---
+    # ==========================================================
+    # 📌 完全一致検索 (最優先)
+    # 目的: キーワードが1つかつ、ポジション列の値と完全に一致する場合のみを抽出
+    # ==========================================================
+    
+    # キーワードが1つのみ AND ポジション列が存在する場合
+    if len(lower_keywords) == 1 and PRIORITY_COLS[0] in df.columns:
+        target_keyword = lower_keywords[0]
+        position_col = PRIORITY_COLS[0]
+        
+        # ポジション列での完全一致フィルター
+        # NaNやNoneを考慮し、文字列に変換して比較
+        df_phase1_match = df[
+            df[position_col].astype(str).str.lower().str.strip() == target_keyword
+        ].copy() # 変更時の SettingWithCopyWarning を避けるためコピー
+        
+        if not df_phase1_match.empty:
+            # 完全一致の結果があった場合、他のフェーズは実行せず、その結果のみを返す
+            print(f"INFO: ポジション列での完全一致検索 (キーワード: '{target_keyword}') で {len(df_phase1_match)} 件ヒット。")
+            return df_phase1_match.reset_index(drop=True)
+            
+        # 完全一致でヒットしなかった場合、処理を継続して、元のコードの AND 部分一致ロジック (フェーズ2, 3) へ進みます。
+        # 完全に完全一致の結果以外は返さないようにする場合は、ここで空のDataFrameを返してください。
+        # 例: return pd.DataFrame() 
+        print(f"INFO: ポジション列での完全一致検索 (キーワード: '{target_keyword}') は 0 件でした。AND部分一致検索 (フェーズ 2, 3) へ移行します。")
+
+    # ==========================================================
+    # 📌 フェーズ 2 & 3: 元のコードの AND 部分一致検索ロジック (完全一致がヒットしない場合、またはキーワードが複数ある場合)
+    # ==========================================================
+    
+    # --- ヘルパー関数: 指定カラムでAND検索 (部分一致) を実行 ---
+    # ここは元のコードのロジック (AND 部分一致) を維持
     def execute_search(current_df: pd.DataFrame, search_cols: List[str]) -> pd.DataFrame:
         available_cols = [col for col in search_cols if col in current_df.columns]
         if not available_cols:
@@ -148,30 +177,19 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
         # キーワードのAND条件を適用
         filter_condition = pd.Series([True] * len(current_df), index=current_df.index)
         for lower_keyword in lower_keywords:
-            filter_condition = filter_condition & df_search_text.str.contains(lower_keyword, na=False)
+            # ✅ 正規表現で単語境界 (\b) を使用し、独立した単語として検索
+            # 例: r'\bjava\b' は 'java' にはヒットするが 'javascript' にはヒットしない
+            regex_pattern = r'\b' + re.escape(lower_keyword) + r'\b'
+            filter_condition = filter_condition & df_search_text.str.contains(regex_pattern, na=False, regex=True)
                 
         return current_df[filter_condition]
-    
-    
-    # ==========================================================
-    # 📌 フェーズ 1: 最優先検索 (ポジション列のみ)
-    # ==========================================================
-    df_phase1 = execute_search(df, PRIORITY_COLS)
-    
-    if not df_phase1.empty:
-        # フェーズ1で結果があった場合、他のフェーズは実行せず、その結果のみを返す
-        print(f"INFO: 最優先検索 (ポジション) で {len(df_phase1)} 件ヒット。他のフェーズはスキップ。")
-        return df_phase1.reset_index(drop=True)
-
-    
-    # ==========================================================
-    # 📌 フェーズ 2 & 3: フェーズ1が空の場合のみ実行
-    # ==========================================================
+        
+    HIGH_PRECISION_COLS = ['ポジション', 'スキル', 'OS']
+    BROAD_RANGE_COLS = ['本文(テキスト形式)', '本文(ファイル含む)', '件名']
 
     # --- フェーズ 2: 高精度検索 ---
-    # 対象: ポジション, スキル, OS
     df_phase2 = execute_search(df, HIGH_PRECISION_COLS)
-    print(f"INFO: 最優先検索が0件のため、高精度検索 (P,S,OS) で {len(df_phase2)} 件ヒット。")
+    print(f"INFO: 高精度検索 (P,S,OS) で {len(df_phase2)} 件ヒット。")
 
     # --- フェーズ 3: 広範囲検索 (重複排除) ---
     df_for_phase3 = df.copy()
@@ -182,21 +200,17 @@ def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataF
 
     # 対象: 本文, 件名
     df_phase3 = execute_search(df_for_phase3, BROAD_RANGE_COLS).copy() 
-
-# これでdf_phase3は独立したDataFrameとなり、以下の代入で警告が出なくなります。
-    if not df_phase3.empty and 'ポジション' in df_phase3.columns:
-        df_phase3['ポジション']
-    print(f"INFO: 広範囲検索 (本文,件名) で {len(df_phase3)} 件ヒット。")
     
-    # --- 💡 広範囲検索でヒットしたレコードの「ポジション」列をクリア (以前の要件) ---
+    # --- 💡 広範囲検索でヒットしたレコードの「ポジション」列をクリア (元の要件) ---
     if not df_phase3.empty and 'ポジション' in df_phase3.columns:
         df_phase3['ポジション'] = '' 
         
+    print(f"INFO: 広範囲検索 (本文,件名) で {len(df_phase3)} 件ヒット。")
+    
     # --- 結果の結合と表示順の決定 (フェーズ2を上位に、フェーズ3を下位に) ---
     df_final_filtered = pd.concat([df_phase2, df_phase3]).reset_index(drop=True)
     
     return df_final_filtered
-
 
 def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd.DataFrame:
     
@@ -367,9 +381,27 @@ def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd
                 upper_norm = re.sub(r'[^0-9]', '', str(upper))
                 filter_condition = filter_condition & (start_col_target_str <= upper_norm)
             
-            df_filtered_target = df_target[filter_condition]
+            df_filtered_target = df_target[filter_condition].copy() # SettingWithCopyWarning回避のためコピーを推奨
 
-            df_filtered = pd.concat([df_filtered_target, df_sokujitsu, df_nan], ignore_index=True)
+            # 💡 追加: ソート用の正規化された日付列を一時的に追加
+            if not df_filtered_target.empty:
+                # フィルタリングに使用した正規化後の文字列 Series を df_filtered_target のインデックスに合わせて抽出
+                # start_col_target_str は df_target のインデックスを持つため、filter_conditionで絞り込まれたインデックスを使用
+                normalized_dates = start_col_target_str.loc[df_filtered_target.index]
+                
+                # 一時列を作成してソート
+                TEMP_SORT_COL = '__temp_sort_date__'
+                df_filtered_target[TEMP_SORT_COL] = normalized_dates
+
+                # 正規化された日付（早い順 = 昇順）でソート
+                df_filtered_target = df_filtered_target.sort_values(
+                    by=TEMP_SORT_COL,  
+                    ascending=True, 
+                    kind='stable'
+                ).drop(columns=[TEMP_SORT_COL]).reset_index(drop=True)
+                
+            # 「即日」のレコードを最上位に配置（即日 > 期間内日付(早い順) > 解析不能）
+            df_filtered = pd.concat([df_sokujitsu, df_filtered_target, df_nan], ignore_index=True)
             df_filtered = df_filtered.reset_index(drop=True)
             
     # すべてのフィルタリングが終わった後、最終結果の並び順を確定させて返却する
