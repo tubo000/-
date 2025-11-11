@@ -5,7 +5,6 @@ import os
 import sys
 # 外部ファイルのインポート (GUI起動に必要なモジュール)
 import main_application 
-import utils 
 
 # 📌 修正1: 抽出結果ファイルのパス定義をインポート
 # config.py から OUTPUT_CSV_FILE を OUTPUT_FILENAME としてエイリアス

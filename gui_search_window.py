@@ -4,7 +4,10 @@ import tkinter as tk
 from tkinter import ttk
 from tkinter import messagebox
 import pandas as pd
+from typing import List
+import numpy as np
 import os
+import re
 import sqlite3 # 📌 DB接続のために追加
 from config import DATABASE_NAME # 📌 DB名を取得するために追加
 import traceback # ← ★★★ この行を追加 ★★★
@@ -13,76 +16,368 @@ import traceback # ← ★★★ この行を追加 ★★★
 # ==============================================================================
 # 0. 共通ユーティリティ（データ処理ロジック）
 # ==============================================================================
+#キーワードの準備
+
+    #キーワード検索の補足
+KEYWORD_MAPPING = {
+    # --- 1. ポジション/ロールの略語変換 (前回の内容 + QA) ---
+    'プログラマー': 'PG',
+    'プログラマ': 'PG',
+    'プロジェクトマネージャー': 'PM',
+    'プロジェクトマネージャ': 'PM',
+    'システムエンジニア': 'SE',
+    'エンジニア': 'SE',
+    '品質保証': 'QA',       # QA -> Quality Assurance
+    'クオリティアシュアランス': 'QA',
+    
+    # --- 2. 技術の類義語変換 (提供リストから抽出) ---
+    # Python
+    'anaconda': 'Python', 'django': 'Python', 'flask': 'Python', 
+    'numpy': 'Python', 'pandas': 'Python', 'scikit-learn': 'Python',
+    
+    # Java
+    'j2ee': 'Java', 'spring': 'Java', 'hibernate': 'Java', 
+    'struts': 'Java', 'mybatis': 'Java', 'jvm': 'Java',
+
+    # JavaScript
+    'typescript': 'JavaScript', 'ts': 'JavaScript', 'vue js': 'JavaScript', 
+    'react js': 'JavaScript', 'angular': 'JavaScript', 'next js': 'JavaScript', 
+    'nuxt js': 'JavaScript', 'jquery': 'JavaScript',
+
+    # C#
+    'dotnet': 'C#', 'aspnet': 'C#', 'wpf': 'C#', 'xamarin': 'C#',
+
+    # C++ / C言語
+    'vc++': 'C++', 'stl': 'C++', 'boost': 'C++', 
+    'ansi c': 'C言語', 'embedded c': 'C言語', 'posix': 'C言語', 'C':'C言語', 'c':'C言語',
+
+    # PHP / Ruby / Go / Mobile
+    'laravel': 'PHP', 'symfony': 'PHP', 'cakephp': 'PHP',
+    'rails': 'Ruby', 'rspec': 'Ruby',
+    'golang': 'Go',
+    'swiftui': 'Swift', 'uikit': 'Swift',
+    'ktor': 'Kotlin',
+    'akka': 'Scala',
+    'dart': 'Flutter',
+    'react native': 'ReactNative',
+
+    # フロントエンド/DevOps/DB
+    'sass': 'HTML/CSS', 'scss': 'HTML/CSS', 'less': 'HTML/CSS', 'tailwind': 'HTML/CSS', 
+    'bootstrap': 'HTML/CSS',
+    'jest': 'Testing_FE', 'mocha': 'Testing_FE', 'chai': 'Testing_FE', 'cypress': 'Testing_FE', 'selenium': 'Testing_FE',
+    'webpack': 'Bundler', 'babel': 'Bundler', 'rollup': 'Bundler', 'vite': 'Bundler',
+    'mysql': 'SQL', 'postgre': 'SQL', 'oracle': 'SQL', 'ms sql': 'SQL', 't-sql': 'SQL', 
+    'pl/sql': 'SQL', 'transact-sql': 'SQL',
+    'mongodb': 'NoSQL', 'redis': 'NoSQL', 'cassandra': 'NoSQL', 'dynamodb': 'NoSQL',
+
+    # クラウド/インフラ/その他
+    'amazon web services': 'AWS', 'ec2': 'AWS', 's3': 'AWS', 'lambda': 'AWS',
+    'microsoft azure': 'Azure',
+    'google cloud platform': 'GCP',
+    '機械学習': 'ML/DL', '深層学習': 'ML/DL', 'ディープラーニング': 'ML/DL',
+    'hadoop': 'BigData', 'spark': 'BigData', 'kafka': 'BigData', 'etl': 'BigData',
+    'tableau': 'Data_Viz', 'power bi': 'Data_Viz', 'domo': 'Data_Viz',
+    'コンテナ': 'Docker',
+    'k8s': 'Kubernetes', 'kubernates': 'Kubernetes',
+    'ansible': 'Ansible', 'chef': 'Ansible', 'puppet': 'Ansible',
+    'ci/cd': 'CI/CD', 'jenkins': 'CI/CD', 'gitlab ci': 'CI/CD', 'github actions': 'CI/CD', 
+    'circleci': 'CI/CD',
+    'prometheus': 'Monitoring', 'grafana': 'Monitoring', 'zabbix': 'Monitoring', 
+    'new relic': 'Monitoring',
+    'vmware': 'Virtualization', 'hyper-v': 'Virtualization', 'esxi': 'Virtualization',
+    'アジャイル': 'Agile/Scrum', 'スクラム': 'Agile/Scrum',
+    'ウォーターフォール': 'Waterfall',
+    'github': 'Git_VCS', 'gitlab': 'Git_VCS', 'bitbucket': 'Git_VCS',
+    'jira': 'Task_Mgt', 'backlog': 'Task_Mgt', 'trello': 'Task_Mgt', 'redmine': 'Task_Mgt',
+    }
 
 def filter_skillsheets_by_keywords(df: pd.DataFrame, keywords: list) -> pd.DataFrame:
     """
-    DataFrameをキーワードで絞り込む（軽量版）。
-    '本文' と '添付ファイル内容' は軽量読み込みでは存在しないため、
-    存在する列 ('スキル', '件名') だけで検索する。
+    キーワードに基づいて3段階の優先順位で検索を実行し、結果を結合して返す。
+
+    優先度1: ポジション列での完全一致 (最優先)
+    優先度2: ポジション, スキル, OSでの高精度検索
+    優先度3: 本文, 件名での広範囲検索
     """
-    if df.empty or not keywords: return df
+    if df.empty or not keywords: 
+        return df
+
+    # 検索対象列の定義
+    PRIORITY_COLS = ['ポジション'] 
+    HIGH_PRECISION_COLS = ['ポジション', 'スキル', 'OS']
+    BROAD_RANGE_COLS = ['本文(テキスト形式)', '本文(ファイル含む)', '件名']
     
-    # 📌 修正: 検索対象列を、軽量読み込みで存在する可能性のある列のみにする
-    search_cols = [col for col in df.columns if col in ['スキル','件名']] 
+    # 全てのキーワードのリストを小文字で準備
+    lower_keywords = [kw.lower().strip() for kw in keywords if kw.strip()]
+    if not lower_keywords: 
+        return df
+    processed_keywords = []
     
-    if not search_cols: return df # 検索対象列がない
+    for kw in keywords:
+        kw_stripped = kw.strip()
+        if not kw_stripped: 
+            continue
+            
+        lower_kw = kw_stripped.lower()
+        
+        # 💡 マッピングをチェックし、あれば略語に置換する
+        mapped_value = KEYWORD_MAPPING.get(lower_kw, None)
+        
+        if mapped_value:
+            # 略語が見つかった場合: 略語のみをリストに追加 (元のキーワードは無視)
+            processed_keywords.append(mapped_value.lower())
+        else:
+            # 略語が見つからなかった場合: 元のキーワードをそのまま追加
+            processed_keywords.append(lower_kw)
+            
+    # 重複を排除し、最終的な検索キーワードリストを作成
+    lower_keywords = list(set(processed_keywords))
+
+    if not lower_keywords: 
+        return df
+
+    # --- ヘルパー関数: 指定カラムでAND検索を実行 ---
+    def execute_search(current_df: pd.DataFrame, search_cols: List[str]) -> pd.DataFrame:
+        available_cols = [col for col in search_cols if col in current_df.columns]
+        if not available_cols:
+            return pd.DataFrame()
+
+        # 検索対象の列の値を結合し、小文字にする
+        df_search_text = current_df[available_cols].astype(str).fillna(' ').agg(' '.join, axis=1).str.lower()
+        
+        # キーワードのAND条件を適用
+        filter_condition = pd.Series([True] * len(current_df), index=current_df.index)
+        for lower_keyword in lower_keywords:
+            filter_condition = filter_condition & df_search_text.str.contains(lower_keyword, na=False)
+                
+        return current_df[filter_condition]
     
-    df_search = df[search_cols].astype(str).fillna(' ').agg(' '.join, axis=1).str.lower()
-    filter_condition = pd.Series([True] * len(df), index=df.index)
-    for keyword in keywords:
-        lower_keyword = keyword.lower().strip()
-        if lower_keyword:
-            filter_condition = filter_condition & df_search.str.contains(lower_keyword, na=False)
-    return df[filter_condition]
+    
+    # ==========================================================
+    # 📌 フェーズ 1: 最優先検索 (ポジション列のみ)
+    # ==========================================================
+    df_phase1 = execute_search(df, PRIORITY_COLS)
+    
+    if not df_phase1.empty:
+        # フェーズ1で結果があった場合、他のフェーズは実行せず、その結果のみを返す
+        print(f"INFO: 最優先検索 (ポジション) で {len(df_phase1)} 件ヒット。他のフェーズはスキップ。")
+        return df_phase1.reset_index(drop=True)
+
+    
+    # ==========================================================
+    # 📌 フェーズ 2 & 3: フェーズ1が空の場合のみ実行
+    # ==========================================================
+
+    # --- フェーズ 2: 高精度検索 ---
+    # 対象: ポジション, スキル, OS
+    df_phase2 = execute_search(df, HIGH_PRECISION_COLS)
+    print(f"INFO: 最優先検索が0件のため、高精度検索 (P,S,OS) で {len(df_phase2)} 件ヒット。")
+
+    # --- フェーズ 3: 広範囲検索 (重複排除) ---
+    df_for_phase3 = df.copy()
+    if not df_phase2.empty and 'ENTRY_ID' in df.columns:
+        # フェーズ2でヒットしたレコードを全体から除外
+        excluded_ids = df_phase2['ENTRY_ID'].unique()
+        df_for_phase3 = df[~df['ENTRY_ID'].isin(excluded_ids)].copy()
+
+    # 対象: 本文, 件名
+    df_phase3 = execute_search(df_for_phase3, BROAD_RANGE_COLS).copy() 
+
+# これでdf_phase3は独立したDataFrameとなり、以下の代入で警告が出なくなります。
+    if not df_phase3.empty and 'ポジション' in df_phase3.columns:
+        df_phase3['ポジション']
+    print(f"INFO: 広範囲検索 (本文,件名) で {len(df_phase3)} 件ヒット。")
+    
+    # --- 💡 広範囲検索でヒットしたレコードの「ポジション」列をクリア (以前の要件) ---
+    if not df_phase3.empty and 'ポジション' in df_phase3.columns:
+        df_phase3['ポジション'] = '' 
+        
+    # --- 結果の結合と表示順の決定 (フェーズ2を上位に、フェーズ3を下位に) ---
+    df_final_filtered = pd.concat([df_phase2, df_phase3]).reset_index(drop=True)
+    
+    return df_final_filtered
 
 
 def filter_skillsheets(df: pd.DataFrame, keywords: list, range_data: dict) -> pd.DataFrame:
-    # (変更なし)
+    
     if df.empty: return df 
-    df_filtered = df.copy()
-    df_filtered = filter_skillsheets_by_keywords(df_filtered, keywords)
+    
+    # 📌 【修正】キーワードフィルタリングを最初に実行するよう修正
+    # keywords リストが空でない場合のみ実行
+    if keywords:
+        df_filtered = filter_skillsheets_by_keywords(df.copy(), keywords)
+    else:
+        df_filtered = df.copy()
+    
     if df_filtered.empty: return df_filtered
+    
     for key, limits in range_data.items():
-        lower = limits['lower']
-        upper = limits['upper']
+        lower = limits.get('lower')
+        upper = limits.get('upper')
+        
         if not lower and not upper: continue
+
+        # 【★全範囲共通の正規化ロジック★】
+        try:
+            val_lower = float(re.sub(r'[^0-9.]', '', str(lower))) if lower else -float('inf')
+            val_upper = float(re.sub(r'[^0-9.]', '', str(upper))) if upper else float('inf')
+
+            if val_lower != -float('inf') and val_upper != float('inf') and val_lower > val_upper:
+                limits['lower'], limits['upper'] = str(upper), str(lower)
+                lower = limits.get('lower')
+                upper = limits.get('upper')
+                
+        except (ValueError, TypeError) as e:
+            print(f"🚨 範囲フィルタリングエラー (キー: {key})：入力値 '{lower}' または '{upper}' が無効な数値形式です。フィルタリングをスキップします。{e}")
+            continue
+        # ----------------------------------------
+        
         col_name = {'age': '年齢', 'price': '単価', 'start': '実働開始'}.get(key)
         
         if col_name not in df_filtered.columns: continue
 
-        if col_name in ['年齢', '単価']:
+        # --- 年齢 (範囲内を優先、NaNを最後に、並び順確定) ---
+        if col_name == '年齢':
             try:
+                if lower and not str(lower).isdigit():
+                    raise ValueError(f"'{col_name}'の下限値は純粋な数字である必要があります。入力値: {lower}")
+                if upper and not str(upper).isdigit():
+                    raise ValueError(f"'{col_name}'の上限値は純粋な数字である必要があります。入力値: {upper}")
+
+                search_lower = int(lower) if lower else -float('inf')
+                search_upper = int(upper) if upper else float('inf')
+                
                 col = df_filtered[col_name]
                 col_numeric = pd.to_numeric(col, errors='coerce') 
-                is_not_nan = col_numeric.notna()
-                min_val = col_numeric.min() if is_not_nan.any() else 0
-                max_val = col_numeric.max() if is_not_nan.any() else float('inf')
-                lower_val = int(lower) if lower and str(lower).isdigit() else min_val
-                upper_val = int(upper) if upper and str(upper).isdigit() else max_val
-                valid_range_filter = is_not_nan & (col_numeric >= lower_val) & (col_numeric <= upper_val)
-                df_filtered = df_filtered[valid_range_filter]
+                
+                is_nan = col_numeric.isna()
+                df_nan = df_filtered[is_nan]
+                df_target = df_filtered[~is_nan].copy()
+
+                if df_target.empty:
+                    df_filtered = df_nan
+                    continue
+                
+                col_numeric_target = col_numeric[~is_nan]
+                
+                range_condition = (col_numeric_target >= search_lower) & (col_numeric_target <= search_upper)
+                
+                df_filtered_target = df_target[range_condition]
+                
+                df_filtered = pd.concat([df_filtered_target, df_nan], ignore_index=True)
+                df_filtered = df_filtered.reset_index(drop=True)
+                
+            except Exception as e:
+                print(f"🚨 フィルタリングエラー: '{col_name}' - {e}")
+                continue
+                
+        # --- 単価 (①完全内包[範囲] → ②完全内包[単独] → ③部分重複 → ④NaN の順で並び替え、並び順確定) ---
+        elif col_name == '単価':
+            try:
+                col = df_filtered[col_name]
+                
+                Ls = int(lower) if lower and str(lower).isdigit() else -float('inf')
+                Us = int(upper) if upper and str(upper).isdigit() else float('inf')
+
+                # ... (単価解析ロジック - 変更なし) ...
+                col_str = col.astype(str).str.strip()
+                col_str_normalized = col_str.str.replace('〜|～|－|~', '-', regex=True)
+                is_pd_nan = col.isna() 
+                is_str_nan = col_str.str.lower() == 'nan'
+                is_original_nan = is_pd_nan | is_str_nan
+                parts = col_str_normalized.str.split('-', expand=True)
+                Ld_raw = pd.to_numeric(parts[0].str.replace(r'[^0-9]', '', regex=True), errors='coerce')
+                Ud_raw = pd.to_numeric(parts.get(1, pd.Series(np.nan, index=parts.index)).str.replace(r'[^0-9]', '', regex=True), errors='coerce')
+                is_single_value = Ud_raw.isna() & Ld_raw.notna()
+                Ud_raw = Ud_raw.fillna(Ld_raw[is_single_value])
+                is_parse_error_nan = Ld_raw.isna() & Ud_raw.isna()
+                is_nan_condition = is_original_nan | is_parse_error_nan
+                df_group3 = df_filtered[is_nan_condition]
+                df_target = df_filtered[~is_nan_condition].copy() 
+                if df_target.empty:
+                    df_filtered = df_group3
+                    continue
+                target_index = df_target.index
+                Ld = Ld_raw.loc[target_index]
+                Ud = Ud_raw.loc[target_index]
+                Ld_filled = Ld.fillna(-float('inf'))
+                Ud_filled = Ud.fillna(float('inf'))
+
+                cond_overlap = (Ld_filled <= float(Us)) & (Ud_filled >= float(Ls))
+                cond_contained = (Ld_filled >= float(Ls)) & (Ud_filled <= float(Us))
+                df_target_overlap = df_target[cond_overlap]
+                if df_target_overlap.empty:
+                    df_filtered = df_group3
+                    continue
+                cond_contained_overlap = cond_contained[df_target_overlap.index]
+
+                df_group1_original = df_target_overlap[cond_contained_overlap]
+                df_group2 = df_target_overlap[~cond_contained_overlap]
+
+                idx_g1 = df_group1_original.index
+                Ld_g1 = Ld_raw.loc[idx_g1]
+                Ud_g1 = Ud_raw.loc[idx_g1]
+                
+                cond_range = (Ld_g1 != Ud_g1)
+                df_group1A = df_group1_original[cond_range] 
+                cond_single = (Ld_g1 == Ud_g1)
+                df_group1B = df_group1_original[cond_single] 
+                
+                df_filtered = pd.concat([df_group1A, df_group1B, df_group2, df_group3], ignore_index=True)
+                df_filtered = df_filtered.reset_index(drop=True)
+
             except Exception as e:
                 print(f"🚨 データ型エラー: '{col_name}'の入力値またはデータが無効です。{e}")
                 continue
-                
+
+        # --- 実働開始 (期間内の数字 → 即日 → NaN の順に表示を固定、並び順確定) ---
         elif key == 'start' and '実働開始' in df_filtered.columns:
+            
             start_col = df_filtered['実働開始']
-            is_nan_or_nat = pd.to_datetime(start_col, errors='coerce').isna()
-            df_target = df_filtered[~is_nan_or_nat].copy()
-            if df_target.empty:
-                 df_filtered = df_target
-                 continue 
-            start_col_target_str = df_target['実働開始'].astype(str).str.replace(r'[^0-9]', '', regex=True)
-            filter_condition = pd.Series([True] * len(df_target), index=df_target.index)
+            start_col_str = start_col.astype(str).str.strip()
+            
+            # ... (実働開始解析ロジック - 変更なし) ...
+            is_sokujitsu = start_col_str.isin(["即日", "即"])
+            is_pd_nan = start_col.isna()
+            is_str_nan = start_col_str.str.lower() == 'nan'
+            is_non_date_base = is_pd_nan | is_str_nan | (start_col_str == "")
+            is_date_candidate = ~is_sokujitsu & ~is_non_date_base
+            df_date_candidate = df_filtered[is_date_candidate].copy()
+            start_col_candidate = df_date_candidate['実働開始']
+            date_series = pd.to_datetime(start_col_candidate, format='%Y%m', errors='coerce')
+            is_nat_in_candidate = date_series.isna()
+            is_nan_condition = is_non_date_base.copy() 
+            is_nan_condition.loc[is_nat_in_candidate.index] = is_nat_in_candidate
+            df_nan = df_filtered[is_nan_condition]
+            df_sokujitsu = df_filtered[is_sokujitsu & (~is_nan_condition)]
+            is_target_condition = is_date_candidate
+            df_target = df_filtered[is_target_condition].copy() 
+            if df_target.empty and df_sokujitsu.empty:
+                df_filtered = df_nan
+                continue 
+
+            start_col_prepared = df_target['実働開始'].astype(str)
+            start_col_target_str = start_col_prepared.str.replace(r'[^0-9]', '', regex=True)
+            filter_condition = pd.Series(True, index=df_target.index)
+            
             if lower: 
-                lower_norm = str(lower).replace(r'[^0-9]', '', regex=True)
+                lower_norm = re.sub(r'[^0-9]', '', str(lower))
                 filter_condition = filter_condition & (start_col_target_str >= lower_norm)
             if upper:
-                upper_norm = str(upper).replace(r'[^0-9]', '', regex=True)
+                upper_norm = re.sub(r'[^0-9]', '', str(upper))
                 filter_condition = filter_condition & (start_col_target_str <= upper_norm)
-            df_filtered = df_target[filter_condition]
             
-    return df_filtered
+            df_filtered_target = df_target[filter_condition]
+
+            df_filtered = pd.concat([df_filtered_target, df_sokujitsu, df_nan], ignore_index=True)
+            df_filtered = df_filtered.reset_index(drop=True)
+            
+    # すべてのフィルタリングが終わった後、最終結果の並び順を確定させて返却する
+    return df_filtered.reset_index(drop=True)
+
+
+
+# ------------------------------------------------------------------------------
 
 
 # ==============================================================================
@@ -248,6 +543,32 @@ class App(tk.Toplevel):
         self.current_frame = self.screen2
         self.current_frame.grid(row=0, column=0, sticky='nsew')
 
+        if self.db_has_new_data_var and self.db_has_new_data_var.get():
+            print("INFO: 新規データを検出。Screen2表示時に自動で一覧を更新します...")
+            # 画面が描画されるのを少し待ってから自動更新を実行
+            self.after(100, self.auto_refresh_on_startup)
+        # ★★★ 修正ここまで ★★★
+ 
+ 
+    # ★★★ このメソッドを App クラス内に「追加」 ★★★
+    def auto_refresh_on_startup(self):
+        """起動時の自動更新処理 (show_screen2 から呼ばれる)"""
+        try:
+            # 現在の画面が Screen2 であることを確認
+            if self.current_frame and isinstance(self.current_frame, Screen2):
+                # Screen2 の refresh_data_from_db メソッドを直接呼び出す
+                print("DEBUG: auto_refresh_on_startup が refresh_data_from_db を呼び出します。")
+                self.current_frame.refresh_data_from_db()
+            elif self.screen2:
+                # current_frame が設定されるのが遅れる場合も想定
+                print("DEBUG: auto_refresh_on_startup (fallback) が refresh_data_from_db を呼び出します。")
+                self.screen2.refresh_data_from_db()
+            else:
+                print("WARN: 自動更新を試みましたが、Screen2 が見つかりません。")
+        except Exception as e:
+            print(f"ERROR: 起動時の自動更新に失敗しました: {e}")
+            traceback.print_exc()
+
 
 # ==============================================================================
 # 2. 画面1: 検索条件の入力
@@ -378,6 +699,19 @@ class Screen2(ttk.Frame):
         self.add_keyword_entry = ttk.Entry(self)
         self.add_keyword_entry.grid(row=1, column=0, padx=10, pady=(10, 0), sticky='ew')
         ttk.Button(self, text="適応", command=self.apply_new_keywords).grid(row=1, column=1, padx=10, pady=(10, 0), sticky='e')
+
+        # 📌 追記: キーワード数表示用のラベルとStringVar
+        self.keyword_count_var = tk.StringVar(value="1/5")
+        self.keyword_count_label = ttk.Label(self, textvariable=self.keyword_count_var)
+        # 画面イメージに合わせて、ボタンフレームの右端に配置
+        self.keyword_count_label.grid(row=2, column=0, padx=10, pady=(10, 0), sticky='se')
+        
+        self.tag_frame = ttk.Frame(self)
+        self.tag_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky='w')
+        self.draw_tags() # 既存のタグ描画を呼び出し
+        
+        # 📌 追記: 初期ロード時にラベルを更新
+        self._update_keyword_count_label()
         
         self.tag_frame = ttk.Frame(self)
         self.tag_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=5, sticky='w')
@@ -388,7 +722,13 @@ class Screen2(ttk.Frame):
         self.id_entry.grid(row = 4,column=0, padx=10, pady=5, sticky='ew')
         ttk.Button(self, text="Outlookで開く", command=self.open_email_from_entry).grid(row=4, column=1, padx=10, pady=5, sticky='e')
 
-        self.setup_treeview() # 修正あり
+        self.setup_treeview() 
+        
+        # --- ▼▼▼【修正】初期ソート順を True (降順) から False (昇順) に変更 ▼▼▼ ---
+        self.sort_column = '受信日時' # 初期ソート列
+        self.sort_reverse = False     # 初期ソート順 (False=昇順, True=降順)
+        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+        
         self.display_search_results()
         
         # --- ▼▼▼【ここから修正】ボタンフレームのレイアウトを .grid() に変更 ▼▼▼ ---
@@ -414,13 +754,24 @@ class Screen2(ttk.Frame):
         self.btn_attachment_content.grid(row=0, column=1, sticky='w') # .grid() に変更
         
         # --- ▼▼▼【ここに追加】(20行) ▼▼▼ ---
-        self.btn_refresh = ttk.Button(
-            button_frame, 
-            text="一覧更新", 
-            command=self.refresh_data_from_db,
-            state='disabled' # デフォルトは無効
+        self.btn_debug_body = ttk.Button(
+        button_frame, 
+        text="キーワードヒット箇所表示", 
+     # 呼び出すメソッドを update_display_area_with_debug に設定
+         command=self.update_display_area_with_debug
         )
-        self.btn_refresh.grid(row=0, column=2, sticky='w', padx=(10, 0))
+# column=2 に配置
+        self.btn_debug_body.grid(row=0, column=2, sticky='w', padx=(10, 0)) 
+
+# 既存の「一覧更新」ボタンの配置を column=3 に変更
+        self.btn_refresh = ttk.Button(
+        button_frame, 
+        text="一覧更新", 
+        command=self.refresh_data_from_db,
+        state='disabled' 
+        )
+# column=3 に配置
+        self.btn_refresh.grid(row=0, column=3, sticky='w', padx=(10, 0))
         
         # 「旗」の状態が変わったら、ボタンの状態も変えるように設定
         if self.master.db_has_new_data_var:
@@ -440,8 +791,30 @@ class Screen2(ttk.Frame):
         ttk.Button(button_frame, text="戻る (検索条件へ)", command=master.show_screen1
         ).grid(row=0, column=4, sticky='e', padx=10) # .grid() に変更
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
-        self.body_text = tk.Text(self, wrap='word', height=10, state='disabled')
+        #本文の文字の大きさの変更はFONTの後を変更する
+        self.body_text = tk.Text(self, wrap='word', height=10, state='disabled',font=('Meiryo', 12))
         self.body_text.grid(row=8, column=0, columnspan=2, padx=10, pady=(0, 10), sticky='nsew')
+        if hasattr(self, 'tree'):
+            self.tree.bind('<<TreeviewSelect>>', self.on_tree_select)
+        
+        # 📌 追記: 初期ロード時にボタンの状態をチェック
+        self.master.after(100, self._update_debug_button_state)
+
+    def on_tree_select(self, event):
+        """Treeviewの項目が選択されたときに呼び出される"""
+        selected_items = self.tree.selection()
+        if selected_items:
+            item_id = selected_items[0]
+            # 本文表示処理 (既存ロジックをここに記述)
+            
+            # 添付ファイルボタンの状態を更新 (既存ロジック)
+            self.check_attachment_content(item_id)
+        else:
+            # 選択解除された場合、添付ファイルボタンを無効化
+            self.btn_attachment_content.config(state='disabled')
+            
+        # 📌 追記: 選択状態が変更された後、デバッグボタンの状態を更新
+        self._update_debug_button_state()
 
 
     def open_email_from_entry(self):
@@ -452,6 +825,37 @@ class Screen2(ttk.Frame):
         else:
              print("エラー: open_email_callback が設定されていません。")
              messagebox.showerror("内部エラー", "Outlookを開く機能が正しく設定されていません。")
+
+    def _update_keyword_count_label(self):
+        """
+        現在のキーワード数（self.master.keywords）を基に、ラベルのテキストと色を更新する。
+        """
+        current_keywords = getattr(self.master, 'keywords', [])
+        current_count = len(current_keywords)
+        max_count = 5 
+
+        # キーワード数が最大値を超えているか、制限に達しているかで色を変更
+        if current_count > max_count:
+            text_color = "red"
+        elif current_count == max_count:
+            text_color = "blue" # 満タンを強調
+        else:
+            text_color = "gray"
+
+        message = f"{current_count}/{max_count}"
+
+        # ラベルの色とテキストを更新
+        self.keyword_count_var.set(message)
+        # ttk.Labelの場合、styleを設定して色を変える必要があります
+        style_name = 'KeywordCount.TLabel'
+        if text_color != "gray":
+            # 実行時にスタイルを動的に作成・変更
+            style = ttk.Style()
+            style.configure(style_name, foreground=text_color)
+            self.keyword_count_label.config(style=style_name)
+        else:
+            self.keyword_count_label.config(style='TLabel') # デフォルトに戻す
+
 
     # --- ▼▼▼ 修正: バグ2対応 (check_attachment_content) ▼▼▼ ---
     def check_attachment_content(self, item_id):
@@ -493,29 +897,272 @@ class Screen2(ttk.Frame):
             self.btn_attachment_content.config(state='disabled') 
     # --- ▲▲▲ 修正ここまで ▲▲▲ ---
 
+    def _update_debug_button_state(self):
+        """
+        キーワードリストに値があり、かつTreeviewで項目が選択されている場合のみ、
+        キーワードヒット箇所表示ボタンを有効にする。
+        """
+        has_keywords = bool(self.master.keywords)
+        is_item_selected = bool(self.tree.selection())
+
+        if has_keywords and is_item_selected:
+            # 両方の条件を満たした場合、ボタンを有効化
+            self.btn_debug_body.config(state='normal')
+            print("DEBUG: キーワードヒット箇所表示ボタンを有効化しました。")
+        else:
+            # どちらかの条件を満たさない場合、ボタンを無効化
+            self.btn_debug_body.config(state='disabled')
+            print(f"DEBUG: キーワードヒット箇所表示ボタンを無効化しました (Keywords: {has_keywords}, Selected: {is_item_selected})")
+
     def _debug_keyword_extraction(self, entry_id, col_name, text_content):
-        # (変更なし)
+        """
+        キーワードのヒット箇所を検索し、デバッグ文字列として整形して返す。
+        線をすべて削除し、シンプルにする。
+        """
+        
         keywords = self.master.keywords
+        # printデバッグ出力はそのまま残します
+        print(f"🔍 DEBUG: _debug_keyword_extraction 実行中")
+        print(f"🔍 参照元キーワードリスト (self.master.keywords): {keywords}")
+        
         if not keywords or not text_content:
-            return
-        print("="*70)
-        print(f"✅ ENTRY_ID: {entry_id} の [{col_name}] ヒット箇所検索:")
+            if not keywords:
+                print("🚨 警告: 参照元キーワードリストが空のため、ヒット箇所検索をスキップします。")
+            
+            # 📌 修正: エラー時の線と不要な改行を削除
+            return f" [{col_name}] ヒット箇所検索:" \
+                   f"\n  - (キーワードリストが空か、本文データがありません)"
+        
+        output = []
+        # 📌 修正: ヘッダー部分をシンプルに
+        output.append(f" [{col_name}] ヒット箇所検索:")
+        
         full_text = str(text_content).replace('_x000D_', '\n')
         full_text_lower = full_text.lower()
-        for keyword in keywords:
+        
+        processed_keywords = [kw for kw in keywords if kw.strip()]
+        
+        total_hits = 0
+        
+        for keyword in processed_keywords:
             lower_keyword = keyword.lower()
             if not lower_keyword: continue
             current_search_pos = 0
+
             while True:
                 start_index = full_text_lower.find(lower_keyword, current_search_pos)
                 if start_index == -1: break
+                
+                total_hits += 1
                 end_index = start_index + len(lower_keyword)
                 current_search_pos = end_index
+                
                 start_context = max(0, start_index - 3)
                 end_context = min(len(full_text), end_index + 3)
                 extracted_text = full_text[start_context:end_context].replace('\n', ' ')
-                print(f"  - '{keyword}' -> '{extracted_text}' ({start_index})")
-        print("="*70)
+                
+                output.append(f"  - '{keyword}' -> '{extracted_text}' ({start_index})")
+        
+        if total_hits == 0:
+             output.append("  - ヒットしませんでした。")
+             
+        # 📌 修正: 末尾の線を削除
+        return "\n".join(output)
+    
+    #デバッグ表示の機能
+    def _debug_keyword_extraction(self, entry_id, col_name, text_content):
+        """
+        キーワードのヒット箇所を検索し、デバッグ文字列として整形して返す。
+        線をすべて削除し、シンプルにする。
+        """
+        
+        keywords = self.master.keywords
+        # デバッグ出力はそのまま
+        print(f"🔍 DEBUG: _debug_keyword_extraction 実行中 (EntryID: {entry_id})")
+        print(f"🔍 参照元キーワードリスト (self.master.keywords): {keywords}")
+        
+        if not keywords or not text_content:
+            if not keywords:
+                print("🚨 警告: 参照元キーワードリストが空のため、ヒット箇所検索をスキップします。")
+            
+            # 📌 【修正箇所】ヒットしなかった、またはデータがない場合の処理を修正
+            # 線のないシンプルなヘッダーとメッセージを返す
+            return f" [{col_name}] ヒット箇所検索:" \
+                   f"\n  - (キーワードリストが空か、本文データがありません)"
+        
+        output = []
+        # 📌 修正: ヒットした場合のヘッダーもシンプルに
+        output.append(f" [{col_name}] ヒット箇所検索:")
+        
+        full_text = str(text_content).replace('_x000D_', '\n')
+        full_text_lower = full_text.lower()
+        
+        processed_keywords = [kw for kw in keywords if kw.strip()]
+        
+        total_hits = 0
+        
+        for keyword in processed_keywords:
+            lower_keyword = keyword.lower()
+            if not lower_keyword: continue
+            current_search_pos = 0
+
+            while True:
+                start_index = full_text_lower.find(lower_keyword, current_search_pos)
+                if start_index == -1: break
+                
+                total_hits += 1
+                end_index = start_index + len(lower_keyword)
+                current_search_pos = end_index
+                
+                start_context = max(0, start_index - 15)
+                end_context = min(len(full_text), end_index + 10)
+                extracted_text = full_text[start_context:end_context].replace('\n', ' ')
+                
+                output.append(f"  - '{keyword}' -> '{extracted_text}' ({start_index})文字付近")
+        
+        if total_hits == 0:
+             output.append("  - ヒットしませんでした。")
+             
+        # 📌 修正: 末尾の線は出力しない
+        return "\n".join(output)
+
+    def update_display_area_with_debug(self):
+        """
+        本文(テキスト形式)と本文(ファイル含む)の両方について、
+        データベースから取得したデータに対してキーワードヒット箇所デバッグ情報を表示する。
+        """
+        TARGET_COLUMNS = ["本文(テキスト形式)", "本文(ファイル含む)"]
+        print(f"DEBUG: キーワードヒット箇所表示ボタンがクリックされました (対象: {TARGET_COLUMNS})")
+        
+        selected_items = self.tree.selection()
+        if not selected_items:
+            print("DEBUG: Treeviewで何も選択されていません。処理を中断します。")
+            return
+
+        item_id = selected_items[0]
+        entry_id = ""
+        
+        # Textウィジェットを初期クリア
+        self.body_text.config(state='normal') 
+        self.body_text.delete(1.0, tk.END) 
+        self.body_text.config(state='disabled')
+        self.master.update_idletasks() 
+
+        # 最終的な表示内容を保持するリスト
+        final_output_parts = []
+        
+        # 1. Treeviewから ENTRY_ID を取得
+        try:
+            tree_columns = list(self.tree['columns'])
+            id_index = tree_columns.index('ENTRY_ID')
+            tree_values = self.tree.item(item_id, 'values')
+            entry_id = str(tree_values[id_index])
+        except Exception as e:
+            error_msg = f"データ取得エラー: ENTRY_IDの取得に失敗しました。詳細: {e}"
+            print(f"🚨 {error_msg}")
+            self.body_text.config(state='normal')
+            self.body_text.insert(tk.END, error_msg)
+            self.body_text.config(state='disabled')
+            return
+
+        # 2. データベース接続情報
+        db_path = os.path.abspath(DATABASE_NAME) 
+        if not os.path.exists(db_path):
+             error_msg = f"データベース {DATABASE_NAME} が見つかりません。"
+             print(f"🚨 {error_msg}")
+             self.body_text.config(state='normal')
+             self.body_text.insert(tk.END, error_msg)
+             self.body_text.config(state='disabled')
+             return
+
+        # 3. 各カラムをループしてデータを取得し、デバッグ情報を生成
+        conn = None
+        try:
+            conn = sqlite3.connect(db_path)
+            cursor = conn.cursor()
+
+            for content_type in TARGET_COLUMNS:
+                full_text_content = ""
+                current_debug_output = ""
+                
+                try:
+                    # データベースからデータを取得
+                    query = f"SELECT \"{content_type}\" FROM emails WHERE \"EntryID\" = ?"
+                    cursor.execute(query, (entry_id,))
+                    row = cursor.fetchone()
+                    
+                    if row and pd.notna(row[0]) and str(row[0]).strip() != '':
+                        full_text_content = str(row[0]).replace('_x000D_', '\n') 
+                        
+                        # キーワードヒット箇所を生成
+                        current_debug_output = self._debug_keyword_extraction(entry_id, content_type, full_text_content)
+                    else :
+                        pass
+                    
+                except Exception as col_err:
+                    current_debug_output = f"🚨 DBエラー: [{content_type}] の取得中にエラーが発生しました。\n詳細: {col_err}"
+                
+                # デバッグ情報を最終リストに追加
+                final_output_parts.append(current_debug_output)
+                
+        except Exception as e:
+            final_output_parts.append(f"🚨 重大なデータベース接続エラー: {e}")
+            
+        finally:
+            if conn: conn.close()
+        
+        # 4. Text ウィジェットに結果を連結して書き込む
+        final_text = "\n\n" + ("\n\n").join(final_output_parts)
+        
+        self.body_text.config(state='normal') 
+        self.body_text.delete(1.0, tk.END) 
+        self.body_text.insert(tk.END, final_text)
+        self.body_text.config(state='disabled')
+        print("DEBUG: 両方の本文デバッグ情報の表示が完了しました。")
+
+    def apply_highlights(self, keywords: List[str]):
+        """
+        Textウィジェットに表示された全文に対して、キーワードのハイライトを非同期で適用する
+        """
+        if not keywords:
+            return # キーワードがなければ何もしない
+        try:
+            self.body_text.config(state='normal')
+                        # 既存のハイライトをすべて削除            
+            self.body_text.tag_remove("highlight", 1.0, tk.END)
+                        # ハイライト用のタグを定義 (まだなければ)
+            if "highlight" not in self.body_text.tag_names():
+                self.body_text.tag_configure(                    "highlight", 
+                    background="yellow", 
+                    foreground="black"                )
+            # print(f"INFO: ハイライト処理を開始... (キーワード: {keywords})")# ウィジェットから全文を取得 (これは軽い)            
+            full_text = self.body_text.get(1.0, tk.END)
+            if not full_text:
+                self.body_text.config(state='disabled')
+                return
+            full_text_lower = full_text.lower() # 検索用に小文字化
+            for kw in keywords:
+                if not kw.strip():
+                    continue                                
+                kw_lower = kw.lower()                
+                start_index = 0# ★ re.finditer ではなく、単純な .find() ループの方が高速な場合があるwhile True:
+                    # .find() で次の一致箇所を探す
+                start_index = full_text_lower.find(kw_lower, start_index)
+                if start_index == -1:
+                    break # 見つからなければループ終了
+                    
+                end_index = start_index + len(kw_lower)
+                    
+                # tk.Textのインデックス形式 (例: "1.0", "1.15") に変換
+                start_tk_index = f"1.0 + {start_index} chars"
+                end_tk_index = f"1.0 + {end_index} chars"# ハイライトタグを適用
+                self.body_text.tag_add("highlight", start_tk_index, end_tk_index)
+                    
+                start_index = end_index # 次の検索開始位置を更新except Exception as e:
+            
+        finally:
+            self.body_text.config(state='disabled')
+                # print("INFO: ハイライト処理完了。")
 
     def update_display_area(self, content_type: str):
         # (変更なし - DBオンデマンド読み込み)
@@ -540,21 +1187,21 @@ class Screen2(ttk.Frame):
                 raise IndexError("選択行の値リストが短すぎます。")
             entry_id = str(tree_values[id_index])
             if not entry_id or entry_id == 'N/A':
-                 raise ValueError("有効な EntryID が取得できませんでした。")
+                raise ValueError("有効な EntryID が取得できませんでした。")
 
             db_path = os.path.abspath(DATABASE_NAME)
             if not os.path.exists(db_path):
-                 raise FileNotFoundError(f"データベース {DATABASE_NAME} が見つかりません。")
+                raise FileNotFoundError(f"データベース {DATABASE_NAME} が見つかりません。")
             
             conn = None
-            text_content = ""
             try:
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
+                
                 # 📌 修正: allowed_cols に '本文' (古い名前) も含めておく (安全策)
                 allowed_cols = ["本文(テキスト形式)", "本文(ファイル含む)", "スキル", "件名", "本文"] 
                 if content_type not in allowed_cols:
-                     raise ValueError(f"不正なカラム名 {content_type} が指定されました。")
+                    raise ValueError(f"不正なカラム名 {content_type} が指定されました。")
                 
                 query = f"SELECT \"{content_type}\" FROM emails WHERE \"EntryID\" = ?"
                 cursor.execute(query, (entry_id,))
@@ -564,27 +1211,66 @@ class Screen2(ttk.Frame):
                     full_data = row[0]
                     if pd.notna(full_data) and str(full_data).strip() != '':
                         full_text_content = str(full_data).replace('_x000D_', '\n')
-                        display_text = full_text_content[:1000]
-                        if len(full_text_content) > 1000:
-                            display_text += "...\n\n[--- 1000文字以降は省略 ---]"
+                        
+                        # 🌟 読みやすくするための整形ロジックの開始 🌟
+                        # ターゲット: 最寄り駅, 勤務地, スキル, 単価 など
+                        target_keywords = r'(\s*(最寄り駅|勤務地|スキル|単価|業務内容|必須スキル|歓迎スキル))' 
+                        
+                        # キーワードの直前に改行を挿入（ただし、直前が改行でない場合のみ）
+                        formatted_content = re.sub(
+                            r'([^\n]|^)' + target_keywords, 
+                            r'\1\n\2', 
+                            full_text_content
+                        )
+                        
+                        # 0. 特定の記号（区切り線、見出しなど）の直前に改行を追加し、セクションを明確にする
+                        #    ターゲット: 【】、ー、＝、━、―、─
+                        target_chars = r'[■【━―─=最氏所単稼]' 
+                        formatted_content = re.sub(
+                        r'([^\n]|^)(' + target_chars + '+)', 
+                        r'\1\n\2', 
+                        full_text_content
+                    )
+                        
+                        # 1. 行頭・行末の不要な空白を削除（整形を容易にするため）
+                        cleaned_content = formatted_content.strip()
+
+                        # 2. 連続する複数の改行を、段落を示すための二重改行（\n\n）に統一（3つ以上の改行を2つに）
+                        cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content)
+                        
+                        # 3. 各行の先頭にある不要な空白やタブを除去（不揃いなインデントを解消）
+                        lines = cleaned_content.split('\n')
+                        final_formatted_content = []
+                        for line in lines:
+                            final_formatted_content.append(line.lstrip())
+                        
+                        # 整形後のテキストを最終表示用変数に格納
+                        display_text = '\n'.join(final_formatted_content)
+                        
+                        # 🌟 読みやすくするための整形ロジックの終了 🌟
+                        
+                        # full_text_content は _debug_keyword_extraction に渡すため保持
                         self._debug_keyword_extraction(entry_id, content_type, full_text_content)
                     else:
                         display_text = f"{content_type} のデータが空です。"
                 else:
                     display_text = f"データベースで EntryID '{entry_id}' が見つかりません。"
             except Exception as db_err:
-                 print(f"DB読み込みエラー (update_display_area): {db_err}")
-                 display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
+                print(f"DB読み込みエラー (update_display_area): {db_err}")
+                display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
             finally:
                 if conn: conn.close()
-        except (ValueError, IndexError, FileNotFoundError) as e:
-            display_text = f"データ取得エラー: {e}"
-            print(f"update_display_area でエラー: {e}") 
 
-        self.body_text.config(state='normal') 
-        self.body_text.delete(1.0, tk.END) 
-        self.body_text.insert(tk.END, display_text)
-        self.body_text.config(state='disabled')
+            # 最終的な表示処理
+            self.body_text.config(state='normal') 
+            self.body_text.delete(1.0, tk.END) 
+            # 挿入するテキストを整形後の display_text に変更
+            self.body_text.insert(tk.END, display_text) 
+            self.body_text.config(state='disabled')
+        except Exception as e:
+            print(f"ERROR: テキストの挿入に失敗: {e}")
+            self.body_text.config(state='disabled')
+            return
         
     def draw_tags(self):
         # (変更なし)
@@ -610,33 +1296,106 @@ class Screen2(ttk.Frame):
         # (変更なし)
         if keyword in self.master.keywords:
             self.master.keywords.remove(keyword)
+            
+            # 📌 draw_tags() はタグの再描画を行う (変更なし)
             self.draw_tags()
+            
             if not self.master.df_all_skills.empty:
-                 self.master.df_filtered_skills = filter_skillsheets(self.master.df_all_skills, self.master.keywords, self.master.range_data)
+                self.master.df_filtered_skills = filter_skillsheets(self.master.df_all_skills, self.master.keywords, self.master.range_data)
             else:
-                 self.master.df_filtered_skills = pd.DataFrame()
+                self.master.df_filtered_skills = pd.DataFrame()
             self.display_search_results()
+            
+            # 📌 追記: キーワード削除後、カウントラベルを更新
+            if hasattr(self, '_update_keyword_count_label'):
+                self._update_keyword_count_label() 
+            
+            # 📌 追記: キーワードが減ったことで、デバッグボタンの状態も更新
+            if hasattr(self, '_update_debug_button_state'):
+                self._update_debug_button_state()
 
     def apply_new_keywords(self):
-        # (変更なし)
+        """
+        追加キーワードを適用する。キーワードが最大数に達している場合は警告を出す。
+        """
         new_input = [k.strip() for k in self.add_keyword_entry.get().split(',') if k.strip()]
-        combined_keywords = self.master.keywords + new_input
-        self.master.keywords = list(set(combined_keywords))[:5]
+        
+        # 既存のキーワードを取得
+        current_keywords = self.master.keywords
+        
+        # 現在のキーワード数と追加予定のキーワードを合わせた数を計算
+        # set() を使用して重複を考慮する
+        combined_keywords_set = set(current_keywords) | set(new_input)
+        combined_count = len(combined_keywords_set)
+        max_count = 5
+
+        # 📌 修正: キーワード数チェックと警告
+        # 既存のキーワードが5個あり、かつ新しい入力がある場合（または合計が5個を超える場合）
+        if combined_count > max_count and new_input:
+             # 新しいキーワードを追加せずに警告メッセージを表示
+             messagebox.showwarning("キーワード数の制限", f"キーワードは最大 {max_count} 個までです。\n現在のキーワード数: {len(current_keywords)} 個 (新しいキーワードは追加されませんでした)。")
+             self.add_keyword_entry.delete(0, 'end') 
+             
+             # 警告を出した後もタグの数が変わらないため、そのまま処理を終了する
+             return 
+
+        # --- 通常の更新処理 (変更なし) ---
+        # 実際にキーワードを更新
+        self.master.keywords = list(combined_keywords_set)[:max_count]
+        
         self.draw_tags()
         self.add_keyword_entry.delete(0, 'end') 
+        
         if not self.master.df_all_skills.empty:
+            # filter_skillsheets の定義は省略されていますが、既存ロジックは維持
             self.master.df_filtered_skills = filter_skillsheets(self.master.df_all_skills, self.master.keywords, self.master.range_data)
         else:
             self.master.df_filtered_skills = pd.DataFrame()
+            
         self.display_search_results()
+
+        if hasattr(self, 'reset_sort_status'):
+            self.reset_sort_status()
+            
+        # 📌 ラベルとボタンの状態を更新 (既存の追記部分)
+        self._update_keyword_count_label() 
+        self._update_debug_button_state()
+
+    def _update_debug_button_state(self):
+        """
+        キーワードリストに値があり、かつTreeviewで項目が選択されている場合のみ、
+        キーワードヒット箇所表示ボタンを有効にする。
+        """
+        # self.master.keywords が存在しない場合のフォールバックを追加
+        has_keywords = bool(getattr(self.master, 'keywords', [])) 
+        is_item_selected = bool(self.tree.selection())
+
+        if has_keywords and is_item_selected:
+            self.btn_debug_body.config(state='normal')
+            print("DEBUG: キーワードヒット箇所表示ボタンを有効化しました。")
+        else:
+            self.btn_debug_body.config(state='disabled')
+            print(f"DEBUG: キーワードヒット箇所表示ボタンを無効化しました (Keywords: {has_keywords}, Selected: {is_item_selected})")
         
     # --- ▼▼▼ 修正: バグ2対応 (setup_treeview) ▼▼▼ ---
     def setup_treeview(self):
+        style = ttk.Style()
+    
+    # 📌 Treeview全体の文字サイズ（データ行）と行の高さを設定
+    # 例: データ行のフォントサイズを12、行の高さを25pxに設定
+        style.configure("Treeview", 
+                    font=("Arial", 12), 
+                    rowheight=30)
+        # 📌 【追加】ヘッダーの文字サイズ（見出し行）を設定
+    # 例: ヘッダーのフォントを太字の'Arial'でサイズ10に設定
+        style.configure("Treeview.Heading", 
+                    font=("Arial", 10)) # ここを変更
+        
         if not self.master.df_all_skills.empty:
              cols_available = self.master.df_all_skills.columns.tolist()
              
              # 📌 修正: 'Attachments' を表示対象ベースリストに追加
-             cols_to_display_base = ['受信日時','件名' ,'スキル', '年齢', '単価', '実働開始', 'Attachments'] 
+             cols_to_display_base = ['受信日時', '件名', 'スキル', 'ポジション', 'OS', '年齢', '単価', '実働開始', 'Attachments']
              
              cols_to_display = [col for col in cols_to_display_base if col in cols_available]
              all_columns = ['ENTRY_ID'] + cols_to_display
@@ -648,11 +1407,20 @@ class Screen2(ttk.Frame):
         
         for col in cols_to_display:
             self.tree.heading(col, text=col)
-            width_val = 100
-            if col in ['年齢', '単価']: width_val = 40
-            elif col in ['実働開始']: width_val = 50
-            elif col in ['スキル','件名']: width_val = 150
-            elif col == '受信日時': width_val = 80
+            if col in ['年齢', '単価','受信日時']: 
+                self.tree.heading(col, text=col + ' ▽')
+            if col in ['年齢']:     
+                width_val = 50
+                self.tree.heading(col, command=lambda c=col: self.sort_treeview(c))
+            elif col in ['単価']:
+                width_val = 70
+                self.tree.heading(col, command=lambda c=col: self.sort_treeview(c)) 
+            elif col in ['ポジション']: width_val = 80
+            elif col in ['実働開始']: width_val = 100
+            elif col in ['スキル','件名', 'OS']: width_val = 120
+            elif col == '受信日時': 
+                width_val = 100
+                self.tree.heading(col, command=lambda c=col: self.sort_treeview(c)) 
             
             # 📌 修正: 'Attachments' 列を非表示にする
             elif col == 'Attachments': width_val = 0 
@@ -672,6 +1440,87 @@ class Screen2(ttk.Frame):
         self.tree.bind('<Double-Button-1>', self.treeview_double_click)
         self.tree.bind('<<TreeviewSelect>>', lambda event: self.check_attachment_content(self.tree.focus()))
     # --- ▲▲▲ 修正ここまで ▲▲▲ ---
+
+    def sort_treeview(self, col):
+        """
+        Treeviewを特定の列でソートします。
+        """
+        # ソート列が変更されたか、同じ列がクリックされたかでソート順を反転
+        # 📌 受信日時はソート順を反転しない
+        if col == self.sort_column and col not in ['受信日時']: 
+            self.sort_reverse = not self.sort_reverse
+        # 📌 受信日時は常に降順 (ascending=False) に固定
+        elif col == '受信日時':
+            self.sort_column = col
+            self.sort_reverse = True # 常に降順なのでTrueに固定
+        else:
+            self.sort_column = col
+            self.sort_reverse = True  # 新しい列では昇順から開始
+
+        if not hasattr(self.master, 'df_filtered_skills') or self.master.df_filtered_skills.empty:
+            return
+
+        df = self.master.df_filtered_skills.copy() 
+        sort_key = col
+        
+        # --- (単価、年齢のカスタムソート処理は省略) ---
+        if col == '単価':
+            # ... (既存の単価ソートロジック - 変更なし) ...
+            df['sort_key_value'] = df['単価'].astype(str)
+            df['sort_key_value'] = df['sort_key_value'].str.split('～').str[0]
+            df['sort_key_value'] = pd.to_numeric(df['sort_key_value'], errors='coerce')
+            sort_key = 'sort_key_value'
+            
+        elif col == '年齢':
+            # ... (既存の年齢ソートロジック - 変更なし) ...
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+            sort_key = col
+            
+        elif col == '受信日時':
+            # 📌 受信日時は datetime に変換してソートできるようにする
+            df['sort_key_date'] = pd.to_datetime(df[col], errors='coerce')
+            sort_key = 'sort_key_date'
+            
+        # DataFrameをソート
+        self.master.df_filtered_skills = df.sort_values(
+            by=sort_key,
+            # 📌 受信日時以外は self.sort_reverse を使用。受信日時は常に降順 (False)
+            ascending=False if col == '受信日時' else (not self.sort_reverse), 
+            na_position='last' # NaNを最後に配置
+        )
+        
+        # 一時的なソート列があれば削除
+        if 'sort_key_value' in self.master.df_filtered_skills.columns:
+            self.master.df_filtered_skills = self.master.df_filtered_skills.drop(columns=['sort_key_value'])
+        if 'sort_key_date' in self.master.df_filtered_skills.columns: 
+            self.master.df_filtered_skills = self.master.df_filtered_skills.drop(columns=['sort_key_date'])
+
+
+        # Treeviewを再描画してソート結果を反映
+        self.display_search_results()
+
+        # ... (ヘッダーの記号表示ロジックの修正) ...
+        for old_col in self.tree['columns']:
+            if old_col != 'ENTRY_ID':
+                clean_text = old_col.replace(' ▼', '').replace(' ▲', '').replace(' △', '')
+                
+                if old_col == self.sort_column:
+                    self.tree.heading(old_col, text=clean_text)
+                elif old_col in ['年齢', '単価','受信日時']:
+                    self.tree.heading(old_col, text=clean_text + ' ▽')
+                else:
+                    self.tree.heading(old_col, text=clean_text)
+
+        # 2. 現在のソート列に正しい記号 ('▲' または '▼') を追加
+        if self.sort_column:
+            # 📌 受信日時は常に降順(▼)なので、sort_reverseに関係なく'▼'
+            if self.sort_column == '受信日時':
+                 marker = ' ▼' 
+            else:
+                 marker = ' ▼' if self.sort_reverse else ' ▲' # 降順なら▼, 昇順なら▲
+            
+            current_text = self.tree.heading(self.sort_column, option="text")
+            self.tree.heading(self.sort_column, text=current_text + marker)
         
     def display_search_results(self):
         # (変更なし)
@@ -691,11 +1540,40 @@ class Screen2(ttk.Frame):
                      try: val = str(val).split(' ')[0]
                      except: val = str(val)
                 else: val = str(val)
+                if val == '' and col in ['年齢', '単価']:
+                # 記号 'nan' はほとんどの数値や文字列より後にソートされます
+                    val = 'nan'
                 values.append(val)
             try:
                 self.tree.insert('', 'end', values=values)
             except Exception as e:
                 print(f"🚨 Treeview挿入エラー: 行データ {values} の挿入に失敗しました: {e}")
+
+    def reset_sort_status(self):
+        """
+        単価と年齢列のソート状態をリセットし、ヘッダー表示を '△' に戻す。
+        """
+        # 1. 内部ソート状態変数をリセット
+        self.sort_column = None  # 現在ソートしている列をクリア
+        self.sort_reverse = False # ソート順をクリア
+
+        # 2. Treeviewのヘッダー表示をリセット ('△' に戻す)
+        for col in self.tree['columns']:
+            if col != 'ENTRY_ID':
+                # まず既存の記号を削除
+                clean_text = col.replace(' ▲', '').replace(' ▼', '').replace(' △', '')
+                
+                # 年齢と単価のみ '△' を付ける
+                if col in ['年齢', '単価']:
+                    self.tree.heading(col, text=clean_text + ' △')
+                else:
+                    # その他の列は記号なしの元のテキストに戻す
+                    self.tree.heading(col, text=clean_text)
+
+        # 3. DataFrameのソートをリセット (任意: 最新のフィルタ結果を再表示)
+        # Treeviewの再描画を行うことで、データが元の読み込み順に戻ります
+        # (ただし、直前のフィルタリング結果の並び順に依存します)
+        self.display_search_results()
                 
     def search_by_id(self):
         # (変更なし)
@@ -710,6 +1588,8 @@ class Screen2(ttk.Frame):
         else:
              self.master.df_filtered_skills = pd.DataFrame()
         self.display_search_results()
+
+        
         
     # --- ▼▼▼ 修正: バグ1対応 (treeview_double_click) ▼▼▼ ---
     def treeview_double_click(self, event):

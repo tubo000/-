@@ -46,12 +46,12 @@ EVALUATION_TARGETS = [ '件名','年齢', '単金', '期間_開始', 'スキルo
 
 MASTER_COLUMNS = [
     'EntryID', '件名', '性別', '年齢', '単金','期間_開始',
-    'スキルor言語', 'ポジション', '本文(テキスト形式)'
+    'スキルor言語', 'ポジション', '本文(テキスト形式)','OS'
     #'名前', 'マネジメント経験人数', '技術経験年数', '得意技術',
     #'開発工程_要件定義', '開発工程_基本設計', '開発工程_詳細設計', 
     #'開発工程_製造', '開発工程_結合テスト', '開発工程_システムテスト', 
     #'開発工程_運用・保守', '開発工程_その他',
-    #'業種', '職務', '人数', '開発ツール', 'OS', 
+    #'業種', '職務', '人数', '開発ツール',  
     #'フレームワーク/ライブラリ', 'データベース', 'その他', '備考', 
     #'社名', '宛先メール', '開発手法', '信頼度スコア',
 ]
@@ -61,34 +61,166 @@ SKILL_LANGUAGE_PATTERNS = {
     # ----------------------------------------------------
     # 言語 (Languages) および主要フレームワーク/ライブラリ
     # ----------------------------------------------------
-    "Python": [r'\bPython\b', r'\bPy\s*$', r'Anaconda', r'Django', r'Flask', r'Numpy', r'Pandas', r'scikit-learn'],
-    "Java": [r'\bJava\b(?!Script)', r'\bJ2EE\b', r'\bSpring\b', r'\bHibernate\b', r'Struts', r'MyBatis', r'JVM'], # JavaScriptとの区別
+    "Python": [
+        # Python の後に評価文字や空白のみが続かないことを否定
+        r'\bPython\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'\bPy\s*$', r'Anaconda', r'Django', r'Flask', r'Numpy', r'Pandas', r'scikit-learn'
+    ],
+    "Java": [
+        # JavaScript または評価文字や空白のみが続かないことを否定
+        r'\bJava\b(?!Script|\s*([A-D１-４ア-エ]|$))', 
+        r'\bJ2EE\b', r'\bSpring\b', r'\bHibernate\b', r'Struts', r'MyBatis', r'JVM'
+    ],
     "JavaScript": [r'JavaScript', r'\bJS\b', r'\bNode\.?js\b', r'TypeScript', r'\bTS\b', r'Vue\.?js', r'React\.?js', r'Angular', r'Next\.?js', r'Nuxt\.?js', r'jQuery'],
-    "C#": [r'\bC#\b',r'\bC＃\b' r'\b\.NET\b', r'\bDotNet\b', r'\bASP\.NET\b', r'WPF', r'Xamarin'],
-    "C++": [r'\bC\+\+\b', r'\bVC\+\+\b', r'\bSTL\b', r'Boost'],
-    "C": [r'\bC\b(?!#|\+\+)', r'\bANSI C\b', r'\bEmbedded C\b', r'POSIX'], # C#, C++ との区別
-    "PHP": [r'\bPHP\b', r'Laravel', r'Symfony', r'CakePHP'],
-    "Ruby": [r'\bRuby\b', r'Rails', r'RSpec'],
-    "Go": [r'\bGo\b', r'Golang'],
+    "C#": [
+        # C# の後に評価文字や空白のみが続かないことを否定
+        r'\bC[#＃]\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'\b\.NET\b', r'\bDotNet\b', r'\bASP\.NET\b', r'WPF', r'Xamarin'
+    ],
+    "C++": [
+        # C++ の後に評価文字や空白のみが続かないことを否定
+        r'\bC\+\+\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'\bVC\+\+\b', r'\bSTL\b', r'Boost'
+    ],
+    "C言語": [
+        # C や C B、C の後に評価文字や空白のみが続かないことを否定
+        r'\bC\b(?!#|\+\+|\s*([A-D１-４ア-エ]|$))', 
+        r'\bANSI C\b', r'\bEmbedded C\b', r'POSIX'
+    ],
+    "PHP": [
+        # PHP の後に評価文字や空白のみが続かないことを否定
+        r'\bPHP\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'Laravel', r'Symfony', r'CakePHP'
+    ],
+    "Ruby": [
+        # Ruby の後に評価文字や空白のみが続かないことを否定
+        r'\bRuby\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'Rails', r'RSpec'
+    ],
+    "Go": [
+        # Go の後に評価文字や空白のみが続かないことを否定
+        r'\bGo\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'Golang'
+    ],
     "Swift": [r'\bSwift\b', r'SwiftUI', r'UIKit'],
     "Kotlin": [r'\bKotlin\b', r'Ktor'],
-    "Scala": [r'\bScala\b', r'Akka'], 
+    "Scala": [r'\bScala\b', r'Akka'],
+    "SAS": [r'\bSAS\b(?! Institute)', r'SAS\s*Language', r'SAS/STAT', r'SAS/GRAPH'],
     "ShellScript": [r'Shell Script', r'\bBash\b', r'\bsh\b', r'PowerShell'],
     "VBA": [r'\bVBA\b', r'Excel VBA', r'マクロ'],
     
     # ----------------------------------------------------
+    # 追加: フロントエンド技術 (Frontend Technologies)
+    # ----------------------------------------------------
+    "HTML/CSS": [r'\bHTML(5)?\b', r'\bCSS(3)?\b', r'Sass', r'SCSS', r'Less', r'Tailwind\b', r'Bootstrap'],
+    "Testing_FE": [r'Jest', r'Mocha', r'Chai', r'Cypress', r'Selenium'],
+    "Bundler": [r'Webpack', r'Babel', r'Rollup', r'Vite'],
+    
+    # ----------------------------------------------------
+    # 追加: モバイル開発 (Mobile Development)
+    # ----------------------------------------------------
+    "Flutter": [r'Flutter', r'Dart'],
+    "ReactNative": [r'React\s*Native'],
+
+    # ----------------------------------------------------
     # データベース言語 (SQL/NoSQL)
     # ----------------------------------------------------
-    "SQL": [r'\bSQL\b', r'MySQL', r'Postgre', r'Oracle', r'MS\s*SQL', r'T-SQL', r'PL/SQL', r'Transact-SQL'],
+    "SQL": [
+        # SQL の後に評価文字や空白のみが続かないことを否定
+        r'\bSQL\b(?!\s*([A-D１-４ア-エ]|$))', 
+        r'MySQL', r'Postgre', r'Oracle', r'MS\s*SQL', r'T-SQL', r'PL/SQL', r'Transact-SQL'
+    ],
     "NoSQL": [r'\bNoSQL\b', r'MongoDB', r'Redis', r'Cassandra', r'DynamoDB'],
     
     # ----------------------------------------------------
-    # クラウド (Cloud) - 抽出元で別途欄を作成する場合は削除可能です
+    # クラウド (Cloud)
     # ----------------------------------------------------
     "AWS": [r'\bAWS\b', r'\bAmazon\s*Web\s*Services\b', r'EC2', r'S3', r'Lambda'],
     "Azure": [r'\bAzure\b', r'Microsoft\s*Azure'],
-    "GCP": [r'\bGCP\b', r'Google\s*Cloud\s*Platform']
+    "GCP": [r'\bGCP\b', r'Google\s*Cloud\s*Platform'],
+    # ----------------------------------------------------
+    # AI・データサイエンス (AI/Data Science)
+    # ----------------------------------------------------
+    "ML/DL": [r'\bML\b', r'\bDL\b', r'機械学習', r'深層学習', r'ディープ\s*ラーニング'],
+    "TensorFlow": [r'TensorFlow', r'Keras'],
+    "PyTorch": [r'PyTorch'],
+    "BigData": [r'Hadoop', r'Spark', r'Kafka', r'ETL'],
+    "Data_Viz": [r'Tableau', r'Power\s*BI', r'Domo'],
+    # ----------------------------------------------------
+    # インフラ・DevOps (Infrastructure/DevOps)
+    # ----------------------------------------------------
+    "Docker": [r'\bDocker\b', r'コンテナ'],
+    "Kubernetes": [r'\bK8s\b', r'Kubernetes', r'Kubernates'],
+    "Terraform": [r'Terraform'],
+    "Ansible": [r'Ansible', r'Chef', r'Puppet'],
+    "CI/CD": [r'CI/CD', r'Jenkins', r'GitLab\s*CI', r'GitHub\s*Actions', r'CircleCI'],
+    "Monitoring": [r'Prometheus', r'Grafana', r'Zabbix', r'New\s*Relic'],
+    "Virtualization": [r'VMware', r'Hyper-V', r'\bESXi\b'],
+    # ----------------------------------------------------
+    # 開発手法・ツール (Methodologies/Tools)
+    # ----------------------------------------------------
+    "Agile/Scrum": [r'アジャイル', r'Agile', r'スクラム', r'Scrum'],
+    "Waterfall": [r'ウォーターフォール'],
+    "Git_VCS": [r'\bGit\b', r'GitHub', r'GitLab', r'Bitbucket'],
+    "Task_Mgt": [r'Jira', r'Backlog', r'Trello', r'Redmine']
 }
+
+POSITION_PATTERNS = {
+    'PM': [
+        r'\bP[\.\s-]*M(?!O)\b[とはで]|\bP[\.\s-]*M(?!O)\s*[経験]|プロジェクト\s*マネー[ジ|ジャ|ヤ][ャー|ー]|プロマネ',
+    ],
+    # 🌟 PLの正規表現リストをカンマで区切り、文法を修正
+    'PL': [
+        # 複合略語 (MO/PL, PL&SQ) はそのまま維持
+        r'\bMO[\/\s-]*P[\.\s-]*L\b', 
+        r'\bP[\.\s-]*L[\/\&\s-]*S[\.\s-]*Q\b', 
+        # 💡 PLの略語を(PL|P\.L|P-L)のように厳格化し、誤検出を防ぐ
+        r'\b(PL|P\.L|P-L)\b[とはで]|\b(PL|P\.L|P-L)\s*[経験]',
+        # 正式名称
+        r'プロジェクト\s*リー[ダ|ダー|ド]|プロ[リ|リダ]|リーダ', 
+    ],
+    # SEはリストが閉じられていないため、適切に修正（最後の要素の後にカンマがない）
+    'SE': [
+    # 0. 複合略語パターンを略語として厳密化
+    # SEの直前または直後に、アルファベットではない文字 (スラッシュ, ハイフン, ドットなど) が挟まれている場合のみに限定
+    # 「Sever」のような単語の一部を構成しないようにする
+    r'\b[A-Za-z\.-]+?[\/\s-]+S[\.\s-]*E(?!S|O|J)\b', 
+    r'\bS[\.\s-]*E(?!S|O|J)[\/\s-]+[A-Za-z\.-]+?\b',
+    
+    # 💡 漢字複合略語 (このパターンは問題なし) 
+    r'\bS[\.\s-]*E(?!S|O|J)[\/\s-]*[基本設計実装]|[\s\S]*?[/\s-]*S[\.\s-]*E(?!S|O|J)\b', 
+    r'\b[基本設計実装][\/\s-]*S[\.\s-]*E(?!S|O|J)\b', 
+
+    # 1. 漢字・語尾付きのパターン: (このパターンは問題なし)
+    r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\s*[経験職種役割要員歴].*?', 
+    
+    # 2. 助詞付きのパターン: (このパターンは問題なし)
+    r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\b[とはで]', 
+    
+    # 3. 正式名称/略称 (このパターンは問題なし)
+    r'システム\s*エンジニ[ア|ヤ]|シスエン',
+    
+    # 4. 社内SEの追加 (このパターンは問題なし)
+    r'社内\s*SE|社内\s*システム\s*エンジニ[ア|ヤ]',
+    ],
+    'PG': [
+        r'\bPG\b[^\w]*'
+        r'\b(?<!R)P[\.\s-]*G\b[とはで]|\bP[\.\s-]*G\s*[経験作業]|プログラマ|プログラマー', 
+    ],
+    'QA': [
+       r'\bQ[\.\s-]*A\s*(エンジニ[ア|ヤ]|経験|業務|として|[とはでがにをの])|品質\s*保証|テスト\s*エンジニ[ア|ヤ]|テスタ',
+    ],
+}
+
+OS_PATTERNS = {
+    'Windows': [ r'\b(Windows|Win)\b',r'Windows\s*(Server)?\s*(\d{2,4}|\d|XP|Vista|7|8|8\.1|10|11|NT|2000|2003|2008|2012|2016|2019|2022)\b',], # Windows 10, Windows Server 2019 など
+    'Linux': [r'\bLinux\b',r'\b(CentOS|Ubuntu|Red\s*Hat|RHEL|Fedora|Debian|Amazon\s*Linux|AlmaLinux|Rocky\s*Linux)\b',], # ディストリビューション名
+    'macOS': [r'\b(macOS|Mac\s*OS\s*X?|OS\s*X)\b',], # macOS, Mac OS X, OS X
+    'UNIX': [r'\b(UNIX|Unix)\b', r'\b(Solaris|HP-UX|AIX|FreeBSD|NetBSD|OpenBSD)\b',], # UNIX系OS名
+    'Android': [r'\bAndroid\b',], # Android
+    'iOS': [r'\b(iOS|iPhone\s*OS|iPad\s*OS)\b',], # iOS, iPadOS
+}
+
 INDUSTRIES = ['金融', '医療', 'IT/Web開発', '製造業', '物流', '通信', '公共', 'インフラ'] 
 NAMES = [
     ('田中', '太郎', 0), ('佐藤', '花子', 0), ('鈴木', '一郎', 0), 
@@ -165,7 +297,7 @@ ITEM_PATTERNS = {
     #'フレームワーク/ライブラリ': {'pattern': r'(?:フレームワーク/ライブラリ|FW)[:：]\s*([^\n\r]+?)(?:開発ツール|$)', 'score': 100},
     #'開発ツール': {'pattern': r'(?:ツール|開発ツール)[:：]\s*([^\n\r]+?)(?:得意技術|$)', 'score': 100},
     #'得意技術': {'pattern': r'得意技術[:：]\s*([^\n\r]+?)(?:役割|期間|$)', 'score': 80},
-    #'ポジション': {'pattern': r'(?:役割|役職|ポジション|PMO|職種)[:：]\s*([^\n\r]+?)(?:\s*(?:マネジメント経験人数|技術経験年数|期間|$))', 'score': 80},
+    'ポジション': {'pattern': r'(?:役割|役職|ポジション|PMO|職種)[:：]\s*([^\n\r]+?)(?:\s*(?:マネジメント経験人数|技術経験年数|期間|$))', 'score': 80},
     #'マネジメント経験人数': {'pattern': r'(?:マネジメント|管理経験|管理人数).*?(\d+)\s*名', 'score': 80},
     #'技術経験年数': {'pattern': r'経験年数[:：]\s*(\d+)\s*年', 'score': 80},
     #'開発手法': {'pattern': r'(?:開発手法|開発プロセス)[:：](Agile|アジャイル|Waterfall|ウォーターフォール)', 'score': 80},

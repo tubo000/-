@@ -21,9 +21,8 @@ import gui_search_window
 import utils 
 
 # 既存の内部処理関数をインポート
-from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR
+from config import INPUT_QUESTION_CSV, MASTER_ANSWERS_PATH, OUTPUT_EVAL_PATH, NUM_RECORDS, TARGET_FOLDER_PATH, SCRIPT_DIR, MASTER_COLUMNS
 from extraction_core import extract_skills_data
-from evaluator_core import run_triple_csv_validation, get_question_data_from_csv
 from email_processor import get_mail_data_from_outlook_in_memory
 from email_processor import has_unprocessed_mail 
 # 📌 修正: remove_processed_category, mark_email_as_processed はもう使わない
@@ -158,6 +157,29 @@ def actual_run_extraction_logic(root, main_elements, target_email, folder_path, 
             
             try:
                 conn = sqlite3.connect(db_path)
+                try:
+                    cursor = conn.cursor()
+                    # 1. 現在の 'emails' テーブルの列名を取得
+                    cursor.execute("PRAGMA table_info(emails);")
+                    current_columns = {info[1] for info in cursor.fetchall()} 
+                    
+                    # 2. MASTER_COLUMNS（config.pyからインポート済み）に定義されたすべての列をチェック
+                    # MASTER_COLUMNSはファイル冒頭でインポート済み (from config import ..., MASTER_COLUMNS)
+                    for column_name in MASTER_COLUMNS:
+                        # 'EntryID'はプライマリキー/インデックスとして扱われるため、ALTER TABLEではスキップ
+                        if column_name not in current_columns and column_name != 'EntryID':
+                            # 列が存在しない場合、TEXT型で追加する
+                            # 日本語列名のためにダブルクォートで囲むのが安全
+                            conn.execute(f"ALTER TABLE emails ADD COLUMN \"{column_name}\" TEXT;")
+                            
+                    conn.commit()
+                except sqlite3.OperationalError as e:
+                     # テーブルが存在しない ('no such table') などの場合、次の to_sql で作成されるので続行
+                     pass 
+                except Exception as e:
+                     # その他の予期せぬエラー
+                     # print(f"警告: スキーマ更新中にエラーが発生しました: {e}") # デバッグ用
+                     pass
                 
                 # --- 1. 抽出データをDB保存 ---
                 if not df_extracted.empty:
@@ -830,9 +852,6 @@ def open_search_callback():
         
         # --- 「旗」の処理 (検索一覧が開くことを記録) ---
         db_flag = main_elements.get("db_has_new_data_var")
-        if db_flag:
-            db_flag.set(False) 
-
         # --- ▼▼▼【修正】引数に main_elements を追加 ▼▼▼ ---
         search_app = gui_search_window.App(
             root, 
