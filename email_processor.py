@@ -1,4 +1,4 @@
-# email_processor.py (★ v3m/v3f のエラー対策・ハイブリッド版 ★)
+# email_processor.py (★ v3o エラー対策・ハイブリッド・デバッグ版 ★)
 
 import pandas as pd
 import win32com.client as win32
@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 import base64 # 👈 ★ 1. base64 をインポート (v3mで必要)
+import pywintypes # 👈 ★ 2. エラー処理のためにインポート
 
 # ----------------------------------------------------------------------
 # イニシャルを検出する正規表現を追加
@@ -145,11 +146,11 @@ def has_unprocessed_mail(folder_path: str, target_email: str, days_to_check: int
     return unprocessed_count
 
 # ----------------------------------------------------------------------
-# 💡 メイン抽出関数: Outlookからメールを取得 (★ハイブリッド版★)
+# 💡 メイン抽出関数: Outlookからメールを取得 (★ハイブリッド・デバッグ版★)
 # ----------------------------------------------------------------------
 def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: str, read_mode: str = "all", days_ago: int = None, main_elements: dict = None) -> Iterator[dict]:
     """
-    (★ v3m/v3f エラー対策・ハイブリッド版 ★)
+    (★ v3o エラー対策・ハイブリッド・デバッグ版 ★)
     PropertyAccessor (メモリ) を試し、失敗したら SaveAsFile (ディスク) にフォールバックする
     """
     data_records_batch = [] 
@@ -316,9 +317,10 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         except Exception as attach_err:
                              print(f"  -> 警告(has_files): 添付情報取得エラー: {attach_err}")
 
-                        # --- ▼▼▼ ★★★ 2. ハイブリッド版 添付ファイルループ ★★★ ▼▼▼
+                        # --- ▼▼▼ ★★★ 2. ハイブリッド版 添付ファイルループ (デバッグprint付) ★★★ ▼▼▼
                         if has_files and attachments_collection:
                              if not is_already_in_db: 
+                                 print(f"DEBUG: Mail ID {mail_entry_id[:15]}... に {len(attachment_names)} 個の添付ファイルを発見。")
                                  try:
                                     for attachment in attachments_collection:
                                         if not hasattr(attachment, 'FileName'): continue
@@ -328,6 +330,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                                         
                                         # 1. まず「高速な方法 (メモリ)」を試す
                                         try:
+                                            print(f"DEBUG:  -> '{filename}' を [高速(メモリ)] モードで試行...")
                                             content_bytes = attachment.PropertyAccessor.GetProperty(PR_ATTACH_DATA_BIN)
                                             content_bytes_base64 = base64.b64encode(content_bytes).decode('utf-8')
                                             
@@ -336,12 +339,13 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                                                 temp_file_path=None, 
                                                 content_bytes_base64=content_bytes_base64
                                             )
+                                            print(f"DEBUG:  -> '{filename}' [高速(メモリ)] 成功。 (抽出文字数: {len(extracted_content)})")
                                         
                                         # 2. 高速な方法が失敗 (埋め込み画像など) したら
-                                        except pythoncom.com_error as com_err:
+                                        except (pythoncom.com_error, pywintypes.com_error) as com_err: # 👈 ★ pywintypes もキャッチ
                                             # 'パラメーターが間違っています' エラーをキャッチ
                                             if com_err.hresult == -2147024809:
-                                                print(f"INFO: 埋め込み画像/短縮(Fast)失敗 (File: {filename})。通常(Slow)モードにフォールバックします。")
+                                                print(f"DEBUG:  -> '{filename}' [高速(メモリ)] 失敗。 [安全(ディスク)] モードにフォールバックします。")
                                                 
                                                 # 3. 「安全な方法 (一時ファイル)」にフォールバック
                                                 temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4().hex}_{filename}")
@@ -352,14 +356,16 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                                                         temp_file_path=temp_file_path, # 👈 ★ 一時ファイルパスを渡す
                                                         content_bytes_base64=None
                                                     )
+                                                    print(f"DEBUG:  -> '{filename}' [安全(ディスク)] 成功。 (抽出文字数: {len(extracted_content)})")
                                                 except Exception as save_err:
-                                                    print(f"エラー(Attach Save/Slow): フォールバック失敗 (File: {filename}): {save_err}")
+                                                    print(f"ERROR: (Attach Save/Slow): フォールバック失敗 (File: {filename}): {save_err}")
                                                 finally:
                                                     if os.path.exists(temp_file_path):
                                                         try: os.remove(temp_file_path)
                                                         except OSError: pass
                                             else:
                                                 # その他のCOMエラー
+                                                print(f"ERROR: (Attach Read/Fast): 予期せぬCOMエラー (File: {filename}): {com_err}")
                                                 raise 
                                         
                                         # 4. 抽出結果を結合
@@ -383,7 +389,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         full_search_text = body_subject_search_text + " " + attachments_text
                         is_excluded = False
                         for kw in EXCLUDE_KEYWORDS:
-                            if re.search(kw, full_search_text, re.IGNORECASE):
+                            if re.search(kw, full_text_for_search, re.IGNORECASE):
                                 is_excluded = True
                                 break
                                 
@@ -407,7 +413,7 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                                     skip_ids_batch.append(mail_entry_id)
                                     ids_processed_this_session.add(mail_entry_id)
 
-                except (pythoncom.com_error, AttributeError, Exception) as item_ex:
+                except (pythoncom.com_error, pywintypes.com_error, AttributeError, Exception) as item_ex: # 👈 ★ pywintypes もキャッチ
                     current_id = mail_entry_id if mail_entry_id != 'UNKNOWN' else getattr(item, 'EntryID', 'ID取得失敗')
                     print(f"警告(Item Loop): 処理中にエラー (ID: {current_id}): {item_ex}\n{traceback.format_exc(limit=1)}")
                 finally:
@@ -418,11 +424,11 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
 
             try:
                 item = items.GetNext() 
-            except (pythoncom.com_error, Exception) as next_err:
+            except (pythoncom.com_error, pywintypes.com_error, Exception) as next_err: # 👈 ★ pywintypes もキャッチ
                  print(f"警告: GetNext() でエラー。ループ中断。エラー: {next_err}")
                  break 
 
-    except pythoncom.com_error as com_outer_err:
+    except (pythoncom.com_error, pywintypes.com_error) as com_outer_err: # 👈 ★ pywintypes もキャッチ
          raise RuntimeError(f"Outlook操作エラー (COM): {com_outer_err}\n{traceback.format_exc()}")
     except Exception as e:
         raise RuntimeError(f"Outlook操作エラー: {e}\n{traceback.format_exc()}")
@@ -439,7 +445,6 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
 
         if os.path.exists(temp_dir):
              try:
-                 # (一時ファイルが残っている場合があるので、中身があってもクリーンアップを試みる)
                  for f in os.listdir(temp_dir):
                     try:
                         os.remove(os.path.join(temp_dir, f))
