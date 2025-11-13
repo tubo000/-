@@ -62,44 +62,49 @@ SKILL_LANGUAGE_PATTERNS = {
     # 言語 (Languages) および主要フレームワーク/ライブラリ
     # ----------------------------------------------------
     "Python": [
-        # Python の後に評価文字や空白のみが続かないことを否定
+        # Python の後に評価文字や空白のみが続かないことを否定 (変更なし)
         r'\bPython\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'\bPy\s*$', r'Anaconda', r'Django', r'Flask', r'Numpy', r'Pandas', r'scikit-learn'
     ],
     "Java": [
-        # JavaScript または評価文字や空白のみが続かないことを否定
+        # JavaScript または評価文字や空白のみが続かないことを否定 (変更なし)
         r'\bJava\b(?!Script|\s*([A-D１-４ア-エ]|$))', 
         r'\bJ2EE\b', r'\bSpring\b', r'\bHibernate\b', r'Struts', r'MyBatis', r'JVM'
     ],
     "JavaScript": [r'JavaScript', r'\bJS\b', r'\bNode\.?js\b', r'TypeScript', r'\bTS\b', r'Vue\.?js', r'React\.?js', r'Angular', r'Next\.?js', r'Nuxt\.?js', r'jQuery'],
     "C#": [
-        # C# の後に評価文字や空白のみが続かないことを否定
-        r'\bC[#＃]\b(?!\s*([A-D１-４ア-エ]|$))', 
+        # C# の後に評価文字や空白のみが続かないことを否定 (変更なし)
+        r'\bC/s[#＃]\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'\b\.NET\b', r'\bDotNet\b', r'\bASP\.NET\b', r'WPF', r'Xamarin'
     ],
     "C++": [
-        # C++ の後に評価文字や空白のみが続かないことを否定
+        # C++ の後に評価文字や空白のみが続かないことを否定 (C++ のエスケープを確認)
         r'\bC\+\+\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'\bVC\+\+\b', r'\bSTL\b', r'Boost'
     ],
     "C言語": [
-    # 1. 基本的なC言語の表記 (C、C言語)
-    # C/C言語の直後に #, ++ がないことを確認し、その後に空白またはカンマが続くことを必須とする
-    r'\bC\s*(言語)?\b(?![#\+\+])(?=[\s,])', 
-    
-    # 2. スラッシュ区切りの中のCに対応 (例: Java/C/C#)
-    r'(?<![A-Z])/(C)/(?![A-Z])',
-    
-    # 3. Visual Cに対応 (VC++との混同を避けるため、VC+ではないことを確認)
-    r'\b(VC(?!+)|Visual C)\b', 
-    
-    # 4. 標準規格と組み込み
-    r'\bANSI C\b', 
-    r'\bEmbedded C\b', 
-    r'POSIX'
+        # 1. 基本的なC言語の表記 (C、C言語)
+        # C/C言語の直後に #, ++, C# や C++ の続きがないことを確認し、その後に空白またはカンマが続くことを必須とする
+        r'\b(?!tive)C\s*(言語)?\b(?![#\+])(?=[\s,])', 
+        
+        # 2. スラッシュ区切りの中のCに対応 (例: Java/C/C#)
+        r'(?<![A-Z])/(C)/(?![A-Z])',
+        
+        # 3. Visual Cに対応 (VC++との混同を避けるため、VC+ではないことを確認)
+        r'\b(VC(?!\+{2})|Visual C)\b', 
+        
+        # 4. 標準規格と組み込み
+        r'\bANSI C\b', 
+        r'\bEmbedded C\b', 
+        r'POSIX',
+        
+        # ★★★ ここから追加 ★★★
+        r'\bObjective[-\s]*C\b', # Objective-C, Objective C, ObjectiveC に対応
+        r'\bObj-C\b',             # 略称に対応
+        # ★★★ ここまで追加 ★★★
     ],
     "PHP": [
-        # PHP の後に評価文字や空白のみが続かないことを否定
+        # PHP の後に評価文字や空白のみが続かないことを否定 (変更なし)
         r'\bPHP\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'Laravel', r'Symfony', r'CakePHP'
     ],
@@ -113,7 +118,7 @@ SKILL_LANGUAGE_PATTERNS = {
     # データベース言語 (SQL/NoSQL)
     # ----------------------------------------------------
     "SQL": [
-        # SQL の後に評価文字や空白のみが続かないことを否定
+        # SQL の後に評価文字や空白のみが続かないことを否定 (変更なし)
         r'\bSQL\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'MySQL', r'Postgre', r'Oracle', r'MS\s*SQL', r'T-SQL', r'PL/SQL', r'Transact-SQL'
     ],
@@ -142,11 +147,13 @@ SKILL_LANGUAGE_PATTERNS = {
     "CI/CD": [r'CI/CD', r'Jenkins', r'GitLab\s*CI', r'GitHub\s*Actions', r'CircleCI'],
     "Monitoring": [r'Prometheus', r'Grafana', r'Zabbix', r'New\s*Relic'],
     "Virtualization": [r'VMware', r'Hyper-V', r'\bESXi\b'],
-    }
+}
+
+## 🏢 ポジションパターン (POSITION_PATTERNS)
 
 POSITION_PATTERNS = {
     'PM': [
-        r'\bP[\.\s-]*M(?!O)\b[とはで]', 
+        r'\bP[\.\s-]*M(?!O)\b[\s]*[とはで]', # 助詞の後の空白を許容
         r'\bP[\.\s-]*M(?!O)\s*[経験]', 
         r'プロジェクト\s*マネー[ジ|ジャ|ヤ][ャー|ー]',
         r'プロマネ',
@@ -154,15 +161,13 @@ POSITION_PATTERNS = {
     'PL': [
         r'\bMO[\/\s-]*P[\.\s-]*L\b', 
         r'\bP[\.\s-]*L[\/\&\s-]*S[\.\s-]*Q\b', 
-        r'\b(PL|P\.L|P-L)\b[とはで]',
+        r'\b(PL|P\.L|P-L)\b[\s]*[とはで]', # 助詞の後の空白を許容
         r'\b(PL|P\.L|P-L)\s*[経験]',
         r'プロジェクト\s*リー[ダ|ダー|ド]',
         r'プロ[リ|リダ]',
         r'リーダ', 
     ],
     'SE': [
-        # ★★★ 危険な広範囲マッチパターンを削除 ★★★
-        
         # 0. 複合略語パターンを略語として厳密化
         r'\b[A-Za-z\.-]+?[\/\s-]+S[\.\s-]*E(?!S|O|J)\b', 
         r'\bS[\.\s-]*E(?!S|O|J)[\/\s-]+[A-Za-z\.-]+?\b',
@@ -170,11 +175,11 @@ POSITION_PATTERNS = {
         # 💡 漢字複合略語 (広範囲マッチを含むパターンは削除)
         r'\b[基本設計実装][\/\s-]*S[\.\s-]*E(?!S|O|J)\b', 
 
-        # 1. 漢字・語尾付きのパターン: (末尾の .*? を削除)
+        # 1. 漢字・語尾付きのパターン:
         r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\s*[経験職種役割要員歴]', 
         
         # 2. 助詞付きのパターン:
-        r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\b[とはで]', 
+        r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\b[\s]*[とはで]', # 助詞の後の空白を許容
         
         # 3. 正式名称/略称
         r'システム\s*エンジニ[ア|ヤ]|シスエン',
@@ -182,27 +187,28 @@ POSITION_PATTERNS = {
         # 4. 社内SEの追加
         r'社内\s*SE|社内\s*システム\s*エンジニ[ア|ヤ]',
     ],
-    # ★★★ PGのパターンを修正 ★★★
     'PG': [
-        r'\b(?<!R)PG\b[とはで]', 
-        r'\b(?<!R)P[\.\s-]*G\b[とはで]', 
+        r'\b(?<!R)PG\b[\s]*[とはで]', # 助詞の後の空白を許容
+        r'\b(?<!R)P[\.\s-]*G\b[\s]*[とはで]', # 助詞の後の空白を許容
         r'\b(?<!R)P[\.\s-]*G\s*[経験作業]', 
         r'プログラマ|プログラマー',
     ],
     'QA': [
-        r'\bQ[\.\s-]*A\s*(エンジニ[ア|ヤ]|経験|業務|として|[とはでがにをの])',
+        r'\bQ[\.\s-]*A\s*(エンジニ[ア|ヤ]|経験|業務|として|[\s]*[とはでがにをの])', # 助詞の前の空白を許容
         r'品質\s*保証',
         r'テスト\s*エンジニ[ア|ヤ]|テスタ',
     ],
 }
 
+## 💻 OSパターン (OS_PATTERNS)
+
 OS_PATTERNS = {
-    'Windows': [ r'\b(Windows|Win)\b',r'Windows\s*(Server)?\s*(\d{2,4}|\d|XP|Vista|7|8|8\.1|10|11|NT|2000|2003|2008|2012|2016|2019|2022)\b',], # Windows 10, Windows Server 2019 など
-    'Linux': [r'\bLinux\b',r'\b(CentOS|Ubuntu|Red\s*Hat|RHEL|Fedora|Debian|Amazon\s*Linux|AlmaLinux|Rocky\s*Linux)\b',], # ディストリビューション名
-    'macOS': [r'\b(macOS|Mac\s*OS\s*X?|OS\s*X)\b',], # macOS, Mac OS X, OS X
-    'UNIX': [r'\b(UNIX|Unix)\b', r'\b(Solaris|HP-UX|AIX|FreeBSD|NetBSD|OpenBSD)\b',], # UNIX系OS名
-    'Android': [r'\bAndroid\b',], # Android
-    'iOS': [r'\b(iOS|iPhone\s*OS|iPad\s*OS)\b',], # iOS, iPadOS
+    'Windows': [ r'\b(Windows|Win)\b',r'Windows\s*(Server)?\s*(\d{2,4}|\d|XP|Vista|7|8|8\.1|10|11|NT|2000|2003|2008|2012|2016|2019|2022)\b',],
+    'Linux': [r'\bLinux\b',r'\b(CentOS|Ubuntu|Red\s*Hat|RHEL|Fedora|Debian|Amazon\s*Linux|AlmaLinux|Rocky\s*Linux)\b',],
+    'macOS': [r'\b(macOS|Mac\s*OS\s*X?|OS\s*X)\b',],
+    'UNIX': [r'\b(UNIX|Unix)\b', r'\b(Solaris|HP-UX|AIX|FreeBSD|NetBSD|OpenBSD)\b',],
+    'Android': [r'\bAndroid\b',],
+    'iOS': [r'\b(iOS|iPhone\s*OS|iPad\s*OS)\b',],
 }
 
 INDUSTRIES = ['金融', '医療', 'IT/Web開発', '製造業', '物流', '通信', '公共', 'インフラ'] 
@@ -225,7 +231,7 @@ NOISE = [
 # 必須キーワード/除外キーワードの定義 (Outlookフィルタリング用)
 # ----------------------------------------------------
 MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材のご紹介', r'リソース'] # 必須キーワード
-EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請',r'契約書',r'誓約書',r'案\s*件\s*名',r'作\s*業\s*概\s*要'] # 除外キーワード
+EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請',r'契約書',r'誓約書',r'案\s*件\s*名',r'作\s*業\s*概\s*要',r'案\s*件\s*概\s*要'] # 除外キーワード
 # ----------------------------------------------------
 
 # 年齢の正規表現 

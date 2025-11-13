@@ -9,6 +9,7 @@ from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS,SKILL_LANGUAG
 # 📌 修正1: configから高度な抽出ロジックの正規表現をインポート
 from config import RE_AGE_PATTERNS, RE_TANAKA_KW_PATTERNS, RE_TANAKA_RAW_PATTERNS, KEYWORD_TANAKA
 
+
 # 実働開始日の優先度ランキングを定義 (値が小さいほど高優先度)
 DATE_RANKING = {
     'DATE_FULL': 1,      # yyyy年mm月形式 (例: 202511)
@@ -455,6 +456,7 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
         
         mail_body_for_display = str(row.get('本文(テキスト形式)', 'N/A'))
         file_body_for_display = str(row.get('本文(ファイル含む)', 'N/A'))
+        Attachments_body_for_display = str(row.get('Attachments', 'N/A'))
 
         extracted_data = {'EntryID': mail_id, '件名': row.get('件名', 'N/A'), '宛先メール': row.get('宛先メール', 'N/A')} 
         reliability_scores = {} 
@@ -540,10 +542,19 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
         # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
         #    (これらの変数は、このループの冒頭ですでに定義されています)
         search_text = mail_body_for_display + " " + file_body_for_display
+       # --- ▼▼▼ 修正後の PDF存在チェック (文字列検索) ▼▼▼ ---
+        # Attachments_body_for_display (カンマ区切りのファイル名文字列) 内に
+        # ".pdf" (大文字小文字無視、単語境界付き) が含まれるかチェックする
+        # r'\.pdf\b' は、".pdf" が単語の終わりにくる（つまり拡張子として使われている）ことを確認します。
+        has_pdf_attachment = bool(re.search(r'\.pdf\b', Attachments_body_for_display, re.IGNORECASE))
+        # --- ▲▲▲ 修正後の PDF存在チェック (文字列検索) ▲▲▲ ---
 
         if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
             # config.py の SKILL_LANGUAGE_PATTERNS を使用
             for skill_name, patterns in SKILL_LANGUAGE_PATTERNS.items():
+                if has_pdf_attachment and skill_name == 'C':
+            # PDFがあるため 'C' の抽出は禁止
+                    continue
                 for pattern in patterns:
                     # 大文字小文字を無視してマッチング
                     if re.search(pattern, search_text, re.IGNORECASE):
@@ -647,6 +658,34 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
     
     if '本文(抽出元結合)' in df_extracted.columns:
         df_extracted = df_extracted.drop(columns=['本文(抽出元結合)']) 
+
+    FILTER_COLS_FOR_DELETION = [
+        'スキルor言語', 'ポジション', 'OS', '年齢', '単金', '期間_開始'
+    ]
+    
+    # 2. フィルタリング対象の列が全てデータフレームに含まれているか確認
+    cols_present = [col for col in FILTER_COLS_FOR_DELETION if col in df_extracted.columns]
+    
+    if cols_present:
+        # 3. 欠損値チェック用のデータフレームを準備
+        # 'nan'文字列も欠損として扱うために、math.nan (NaN) に置換します。
+        # (抽出ロジックで欠損値として math.nan または文字列 'nan' が格納されているため)
+        
+        # まず、データフレームをオブジェクト型に変換して置換がスムーズに行えるようにします。
+        df_check = df_extracted[cols_present].copy()
+        
+        # 文字列 'nan' および空文字列 '' を Pandas の欠損値 (NaN) に統一
+        df_check = df_check.replace({'nan': pd.NA, '': pd.NA})
+        
+        # 4. 各行の対象列全てが欠損値 (NaN/pd.NA) であるかを確認
+        # .notna().any(axis=1) : 行ごとに一つでも非欠損値があれば True
+        # ~ (チルダ) : 全て欠損値の行(False)をTrueに反転
+        rows_to_keep = df_check.notna().any(axis=1)
+        
+        # 5. フィルタリングを実行: 全て欠損値の行を除外 (データベース書き込み前のデータフレームから削除)
+        df_extracted = df_extracted[rows_to_keep].reset_index(drop=True)
+        
+    # --- ▲▲▲ ここまで追加 ▲▲▲ ---
         
     all_cols_in_order = [
         'EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 

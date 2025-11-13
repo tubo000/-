@@ -318,6 +318,10 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         received_time = received_time_check
                     except Exception:
                         received_time = datetime.datetime.now().replace(tzinfo=None)
+
+                    subject_check = str(getattr(mail_item, 'Subject', '')).strip()
+                    if re.match(r"^(re|fw)\s*:", subject_check, re.IGNORECASE):
+                        skip_reason = "返信・転送メールにより除外"
                         
                     # 2. スキップ判定 (変更なし)
                     # (★注意: 重複の原因はここのロジックです。read_mode="all" だと is_already_in_db を無視します)
@@ -327,7 +331,12 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         skip_reason = f"期間外"
                     
                     if skip_reason:
-                        pass 
+                    # スキップの場合、is_target は False のまま
+                        # DBにEntryIDを登録するため、skip_ids_batch に追加 (read_mode="all" の場合はDB重複チェックは無視)
+                        skip_ids_batch.append(mail_entry_id) # スキップしたIDも記録 (ただし、DB登録は呼び出し元)
+                        ids_processed_this_session.add(mail_entry_id)
+                        print(f"DEBUG: Mail ID {mail_entry_id[:15]}... は '{skip_reason}' のためスキップ。")
+                        pass
                     
                     else:
                         # 3. 重い処理 (変更なし)
@@ -412,9 +421,12 @@ def get_mail_data_from_outlook_in_memory(target_folder_path: str, account_name: 
                         condition_1_has_attachment = has_files 
                         condition_2_has_must_keyword = any(re.search(kw, body_subject_search_text, re.IGNORECASE) for kw in MUST_INCLUDE_KEYWORDS)
                         condition_3_is_excluded = any(re.search(kw, body_subject_search_text, re.IGNORECASE) for kw in EXCLUDE_KEYWORDS)
-                        is_target = (condition_1_has_attachment or condition_2_has_must_keyword) and not condition_3_is_excluded
-                            
-                            # --- 判定ロジック終了 ---
+
+                        # ★★★ 修正箇所 ★★★
+                        if condition_1_has_attachment:
+                            is_target = True
+                        else:
+                            is_target = condition_2_has_must_keyword and not condition_3_is_excluded
 
 
                         if not is_already_in_db: 

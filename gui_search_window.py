@@ -28,10 +28,7 @@ KEYWORD_MAPPING = {
     'エンジニア': 'SE',
     '品質保証': 'QA',       # QA -> Quality Assurance
     'クオリティアシュアランス': 'QA',
-    
-    # --- 2. 技術の類義語変換 (提供リストから抽出) ---
-    # (中略) ... Python, Java, JavaScript などのマッピング ...
-    'jira': 'Task_Mgt', 'backlog': 'Task_Mgt', 'trello': 'Task_Mgt', 'redmine': 'Task_Mgt',
+
     }
 
 # ------------------------------------------------------------------------------
@@ -1232,11 +1229,27 @@ class Screen2(ttk.Frame):
         all_pattern_dicts = [SKILL_LANGUAGE_PATTERNS, POSITION_PATTERNS, OS_PATTERNS] 
     
         for user_keyword in target_keywords:
-            for pattern_dict in all_pattern_dicts:
-                # 辞書内にユーザーが選択したキーワードがあれば、そのパターンを取得
-                if user_keyword in pattern_dict: 
-                    search_patterns[user_keyword] = pattern_dict[user_keyword]
-                    break # 最初に見つかった辞書でループを終了
+        # ユーザーキーワードを小文字化
+            lower_user_keyword = user_keyword.lower() 
+        
+            found = False
+        for pattern_dict in all_pattern_dicts:
+            # 辞書のキーと値を小文字化して比較するための辞書ビューを作成
+            # 例: {"python": ["r'\\bpython\\b'"], "java": [...] }
+            lower_key_map = {k.lower(): k for k in pattern_dict.keys()}
+            
+            if lower_user_keyword in lower_key_map:
+                # ユーザーが入力した小文字のキーに対応する元のキー (例: "Python") を取得
+                original_keyword = lower_key_map[lower_user_keyword]
+                
+                # オリジナルのキーでパターンを取得し、元のユーザーキーワードで格納
+                search_patterns[user_keyword] = pattern_dict[original_keyword]
+                
+                found = True
+                break # 最初に見つかった辞書でループを終了
+        
+        if not found:
+            print(f"DEBUG: キーワード '{user_keyword}' はどのパターン辞書にも見つかりませんでした。")
         
         if not search_patterns:
             output.append("  - ⚠️ 警告: 選択されたキーワードに対応する正規表現パターンが見つかりませんでした。")
@@ -1279,7 +1292,7 @@ class Screen2(ttk.Frame):
 
     def update_display_area_with_debug(self):
         # (変更なし - ロジックはシンプル+高度に対応済み)
-        TARGET_COLUMNS = ["本文(テキスト形式)", "本文(ファイル含む)"]
+        TARGET_COLUMNS = ["本文(テキスト形式)", "本文(ファイル含む)","件名"]
         print(f"DEBUG: キーワードヒット箇所表示ボタンがクリックされました (対象: {TARGET_COLUMNS})")
         
         selected_items = self.tree.selection()
@@ -1450,13 +1463,13 @@ class Screen2(ttk.Frame):
                         
                         # 1. キーワードの直前に改行を挿入
                         formatted_content = re.sub(
-                            r'([^■<◎〔＜\n【=\s-]|^)' + target_keywords_fixed,
+                            r'([^■<◎〔＜\n【]|^)' + target_keywords_fixed,
                             r'\1\n\2', 
                             full_text_content
                         )
                         
                         # 2. 特定の記号（区切り線、見出しなど）の直前に改行を追加
-                        target_chars = r'[■◎●〔【＜]' 
+                        target_chars = r'[■◎〔【＜]' 
                         
                         # 💡 修正: 1回目の結果(formatted_content)に対して2回目の置換を実行する
                         formatted_content = re.sub(

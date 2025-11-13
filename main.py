@@ -1,29 +1,30 @@
 # main.py
 # 目的: アプリケーションのGUI（メールテストモード）を起動する
+# (★ マルチプロセス対応版 ★)
 
 import os
 import sys
-
+import multiprocessing # 👈 ★ 1. multiprocessing をインポート
+import traceback
 # 外部ファイルのインポート (GUI起動に必要なモジュール)
 import main_application 
-import utils 
+# (utils.py は main_application がインポートするので、ここでは不要)
 
 # 📌 修正1: 抽出結果ファイルのパス定義をインポート
-# config.py から OUTPUT_CSV_FILE を OUTPUT_FILENAME としてエイリアス
+# (v34のコードと変更なし)
 try:
     from config import OUTPUT_CSV_FILE as OUTPUT_FILENAME
 except ImportError:
-    # config.py に OUTPUT_CSV_FILE がない場合、email_processor.py からフォールバック
     try:
         from email_processor import OUTPUT_FILENAME
     except ImportError:
-        # 両方にない場合、デフォルトのファイル名を定義
         OUTPUT_FILENAME = 'extracted_skills_result.xlsx'
 
 
 # ----------------------------------------------------
 # 📌 修正2: 不要な関数を削除
 # ----------------------------------------------------
+# (v34のコードと変更なし)
 # reorder_output_dataframe 関数 (試験モードでのみ使用) は削除されました。
 # main_process_exam_mode 関数 (試験モード本体) は削除されました。
 # ----------------------------------------------------
@@ -34,31 +35,39 @@ except ImportError:
 # ----------------------------------------------------
 
 def main_dispatcher():
-    """プログラムの開始点。メールテストモード(GUI)を直接起動する。"""
-    
-    # 📌 修正3: モード選択ロジックを削除
+    """
+    (v34のコードと変更なし)
+    プログラムの開始点。メールテストモード(GUI)を直接起動する。
+    """
     
     try:
         # GUIアプリケーションのエントリーポイントを呼び出す
         output_file_abs_path = os.path.abspath(OUTPUT_FILENAME)
         
-        # 起動時のファイル存在チェック (コンソールへの警告)
         if not os.path.exists(output_file_abs_path):
             print(f"⚠️ 警告: 抽出結果ファイル ('{OUTPUT_FILENAME}') が見つかりません。")
             print("         GUIを起動しますが、検索一覧はファイル作成後 ('抽出実行') に利用可能です。")
         
         print("\n→ メールテストモードをGUIで開始します。")
         main_application.main() 
-            
+        
     except Exception as e:
-        print(f"致命的なエラーが発生しました: {e}")
-        traceback.print_exc() # 📌 修正4: エラー詳細を表示するため traceback を追加
-        input("エラーのため終了します。Enterキーを押してください...")
+        print(f"\n--- 致命的なエラーが発生しました ---")
+        print(f"エラータイプ: {type(e).__name__}")
+        print(f"エラー詳細: {e}")
+        traceback.print_exc()
+        print("---------------------------------")
+        input("Enterキーを押して終了します...")
 
-
+# ----------------------------------------------------
+# プログラム実行
+# ----------------------------------------------------
 if __name__ == "__main__":
-    # 📌 修正5: traceback を使用するためにインポート
-    import traceback 
     
-    # プログラムの実行開始
+    # --- ▼▼▼ ★★★ 修正箇所 ★★★ ▼▼▼
+    # マルチプロセス（EXE化）のために、
+    # すべての処理の「前」にこの1行が必須です。
+    multiprocessing.freeze_support()
+    # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+    
     main_dispatcher()
