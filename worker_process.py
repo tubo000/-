@@ -9,7 +9,8 @@ import pythoncom
 import win32com.client as win32
 import sqlite3
 import traceback
-from datetime import datetime, timedelta
+import datetime
+from datetime import timedelta
 import re # 👈 ★ reorder_output_dataframe で使用
 
 # (main_application.pyから、必要な関数を丸ごと移動)
@@ -60,15 +61,34 @@ def delete_processed_records(days_ago: int, db_path: str, table_name: str) -> st
     if table_name == "skipped_ids" and days_ago != 0:
         return f"INFO(skipped_ids): スキップIDは日付指定削除の対象外です。"
 
-    if days_ago == 0:
+    # ▼▼▼ 修正 1 (メッセージをテーブル名に応じて変更) ▼▼▼
+    if table_name == "emails":
+        if days_ago == 0:
+            where_clause = "" 
+            target_message = "抽出済みレコード (すべて)"
+        else:
+            cutoff_date = today - timedelta(days=(days_ago - 1)) 
+            cutoff_datetime = datetime.datetime.combine(cutoff_date, datetime.time.min) 
+            cutoff_str = cutoff_datetime.strftime('%Y-%m-%d %H:%M:%S')
+            where_clause = f"WHERE \"受信日時\" < '{cutoff_str}'"
+            target_message = f"抽出済みレコード ('{days_ago}日前以前')"
+    
+    elif table_name == "skipped_ids":
+        # (このロジックに到達する時点で days_ago == 0 が保証されている)
         where_clause = "" 
-        target_message = f"テーブル '{table_name}' のすべての取り込み記録"
-    else:
-        cutoff_date = today - timedelta(days=(days_ago - 1)) 
-        cutoff_datetime = datetime.datetime.combine(cutoff_date, datetime.time.min) 
-        cutoff_str = cutoff_datetime.strftime('%Y-%m-%d %H:%M:%S')
-        where_clause = f"WHERE \"受信日時\" < '{cutoff_str}'"
-        target_message = f"テーブル '{table_name}' の '{days_ago}日前以前' の記録"
+        target_message = "スキップID (すべて)"
+        
+    else: # 念のためフォールバック
+        if days_ago == 0:
+            where_clause = "" 
+            target_message = f"テーブル '{table_name}' のすべての取り込み記録"
+        else:
+            cutoff_date = today - timedelta(days=(days_ago - 1)) 
+            cutoff_datetime = datetime.datetime.combine(cutoff_date, datetime.time.min) 
+            cutoff_str = cutoff_datetime.strftime('%Y-%m-%d %H:%M:%S')
+            where_clause = f"WHERE \"受信日時\" < '{cutoff_str}'"
+            target_message = f"テーブル '{table_name}' の '{days_ago}日前以前' の記録"
+    # ▲▲▲ 修正 1 ▲▲▲
 
     deleted_count = 0
     if not os.path.exists(db_path):
@@ -87,9 +107,11 @@ def delete_processed_records(days_ago: int, db_path: str, table_name: str) -> st
             delete_sql = f"DELETE FROM {table_name} {where_clause}"
             cursor.execute(delete_sql)
             conn.commit() 
-            return f"{target_message} ({deleted_count}件) を削除しました。"
+            # ▼▼▼ 修正 1 (メッセージ文言の変更) ▼▼▼
+            return f"{target_message} {deleted_count}件 を削除しました。"            
         else:
             return f"{target_message} は見つかりませんでした。削除は行われませんでした。"
+            # ▲▲▲ 修正 1 ▲▲▲
     except sqlite3.Error as e: 
         if conn: conn.rollback() 
         if "no such table" in str(e): 
@@ -126,7 +148,7 @@ def actual_run_extraction_logic(main_elements, target_email, folder_path, read_m
                 days_ago = int(read_days)
                 if days_ago < 0: raise ValueError("日数は0以上")
             except ValueError:
-                gui_queue.put("ERROR:期間指定は **0以上** の整数で指定してください。\n(空欄の場合は全期間)")
+                gui_queue.put("ERROR:期間指定は 0以上の整数で指定してください。\n(空欄の場合は全期間)")
                 return 
 
         if days_ago == 0: mode_text = "未処理 (今日のみ)"
@@ -153,14 +175,19 @@ def actual_run_extraction_logic(main_elements, target_email, folder_path, read_m
         for batch_data in df_mail_data_generator:
             # (中断フラグのチェックは email_processor 側 で行われている)
             
-            batch_number += 1
+            batch_number += 300
             df_mail_data_batch = batch_data.get("data_batch", pd.DataFrame())
             skip_ids_batch = batch_data.get("skip_ids", [])
             
             if df_mail_data_batch.empty and not skip_ids_batch:
                 continue 
 
-            gui_queue.put(f"STATUS: バッチ{batch_number} を処理中...")
+            if df_mail_data_batch.empty and not skip_ids_batch:
+                continue 
+
+            # ▼▼▼ 修正 2 (ステータスメッセージの変更) ▼▼▼
+            gui_queue.put(f"STATUS: {batch_number}件目抽出中")
+            # ▲▲▲ 修正 2 ▲▲▲
             
             df_extracted = pd.DataFrame()
             if not df_mail_data_batch.empty:
@@ -210,8 +237,8 @@ def actual_run_extraction_logic(main_elements, target_email, folder_path, read_m
                         df_new.to_sql('emails', conn, if_exists='append', index=True) 
                         newly_saved_count = len(df_new)
                         total_new_records_saved += newly_saved_count 
-                        print(f"INFO: {newly_saved_count} 件の新規レコードをDBに追記しました。(累計: {total_new_records_saved} 件)")
-                        gui_queue.put("ENABLE_SEARCH_BUTTON")
+                        # ▼▼▼ 修正 3 (デバッグ用コンソール出力を無効化) ▼▼▼
+                        # print(f"INFO: {newly_saved_count} 件の新規レコードをDBに追記しました。(累計: {total_new_records_saved} 件)")                            gui_queue.put("ENABLE_SEARCH_BUTTON")
 
                 if skip_ids_batch:
                     try:
@@ -223,14 +250,15 @@ def actual_run_extraction_logic(main_elements, target_email, folder_path, read_m
                     unique_ids_in_batch = set(skip_ids_batch)
                     new_skip_ids = [eid for eid in unique_ids_in_batch if eid not in existing_skip_ids] 
                     
+                    # [修正後]
                     if new_skip_ids:
-                         df_skip = pd.DataFrame(new_skip_ids, columns=['EntryID'])
-                         df_skip.set_index('EntryID', inplace=True)
-                         df_skip.to_sql('skipped_ids', conn, if_exists='append', index=True)
-                         total_items_skipped += len(new_skip_ids)
-                         print(f"INFO: {len(new_skip_ids)} 件のスキップIDをDBに追記しました。(累計: {total_items_skipped} 件)")
-                         gui_queue.put("ENABLE_SEARCH_BUTTON")
-
+                            df_skip = pd.DataFrame(new_skip_ids, columns=['EntryID'])
+                            df_skip.set_index('EntryID', inplace=True)
+                            df_skip.to_sql('skipped_ids', conn, if_exists='append', index=True)
+                            total_items_skipped += len(new_skip_ids)
+                            # ▼▼▼ 修正 3 (デバッグ用コンソール出力を無効化) ▼▼▼
+                            # print(f"INFO: {len(new_skip_ids)} 件のスキップIDをDBに追記しました。(累計: {total_items_skipped} 件)")
+                            gui_queue.put("ENABLE_SEARCH_BUTTON")
             except Exception as e:
                 print(f"❌ データベース書き込み中にエラー発生: {e}")
                 gui_queue.put(f"DB_ERROR:データベースへの書き込み中にエラーが発生しました。\n詳細: {e}")
@@ -259,30 +287,35 @@ def actual_run_extraction_logic(main_elements, target_email, folder_path, read_m
         gui_queue.put("EXTRACTION_COMPLETE_ENABLE_BUTTON") 
         pythoncom.CoUninitialize()
 
-# ======================================================================
-# ★★★ 移植 4: actual_run_file_deletion_logic (main_application.py から移植) ★★★
-# ======================================================================
-
 def actual_run_file_deletion_logic(main_elements, gui_queue):
-    """ (main_application.py [v5] から移植) """
+    """
+    (main_application.py [v5] から移植)
+    v_single_thread の堅牢なエラーハンドリングと結果レポートロジックを
+    v_multi_process の gui_queue 構造に統合した修正版。
+    """
     
     try:
-        # ★ 修正: main_elements から直接 .get() するのではなく、
-        #         渡された辞書からキーで値を取得する
+        # 1. 入力値の取得
         days_input = main_elements["delete_days_entry"] 
         db_path = os.path.abspath(DATABASE_NAME) 
 
+        # 2. 入力値の検証
         try:
             days_ago = int(days_input)
             if days_ago < 0: 
                 raise ValueError("日数は0以上の整数を指定してください。")
         except ValueError as e:
-            gui_queue.put(f"ERROR:削除日数の入力が不正です: {e}\n(0以上の整数で指定)")
+            # ▼▼▼ 修正 (v3で適用済み) ▼▼▼
+            # 検証エラーをGUIスレッドに通知
+            gui_queue.put(f"MSGBOX_ERROR:入力エラー:削除日数の入力が不正です: {e}\n(0以上の整数で指定)")
+            # ▲▲▲ 修正 ▲▲▲
             gui_queue.put("STATUS: 削除失敗 (入力不正)。")
             return 
 
+        # 3. 実行中ステータスをGUIスレッドに通知
         gui_queue.put(f"STATUS: DBレコード削除試行中...")
 
+        # 4. 削除処理
         db_exists = os.path.exists(db_path) 
         delete_result_message = "" 
         delete_result_message_skipped = "" 
@@ -290,35 +323,65 @@ def actual_run_file_deletion_logic(main_elements, gui_queue):
 
         if db_exists:
             try:
+                # 抽出済み(emails)テーブルから削除
+                # (引数は検証済みの 'days_ago' を使う)
                 delete_result_message = delete_processed_records(days_ago, db_path, "emails")
+                # スキップ済み(skipped_ids)テーブルから削除
                 delete_result_message_skipped = delete_processed_records(days_ago, db_path, "skipped_ids")
                 
                 if "エラー:" in delete_result_message or "エラー:" in delete_result_message_skipped:
                     db_had_error = True 
+            
+            except NameError:
+                delete_result_message = "内部エラー: レコード削除関数(delete_processed_records)が見つかりません。"
+                db_had_error = True
             except Exception as db_del_err:
-                 delete_result_message = f"DBレコード削除中に予期せぬエラーが発生しました。\n{db_del_err}" 
-                 db_had_error = True
+                delete_result_message = f"DBレコード削除中に予期せぬエラーが発生しました。\n{db_del_err}" 
+                db_had_error = True
         else:
-            delete_result_message = f"データベースファイル '{os.path.basename(db_path)}' が見つかりませんでした。DBレコード削除はスキップされました。"
+            delete_result_message = f"INFO: データベースファイル '{os.path.basename(db_path)}' が見つかりませんでした。DBレコード削除はスキップされました。"
 
+        # 5. 結果レポートの準備
+        
+        # 5a. 2つのテーブルの結果メッセージを統合
         final_msg = delete_result_message + "\n" + delete_result_message_skipped.replace("INFO: ", "")
-                 
+        final_msg = final_msg.strip() 
+        
+        # 5b. 最終的なメッセージタイトルとステータスを決定
         msg_title = "処理完了"
+        msg_icon_type = "MSGBOX_INFO" # GUIキュー用の命令
         final_status_text = "状態: 削除処理完了。"
         
         if db_had_error:
-             msg_title = "処理完了 (DB削除エラー)"
-             final_status_text = "状態: DB削除エラー。"
-        elif "INFO:" in delete_result_message:
-             msg_title = "処理スキップ"
-             final_status_text = "状態: DBファイルなし。"
-             
-        gui_queue.put(f"MSGBOX:{msg_title}:{final_msg}")
+            msg_title = "処理完了 (DB削除エラー)"
+            msg_icon_type = "MSGBOX_WARNING"
+            final_status_text = "状態: DB削除エラー。"
+        elif "INFO:" in delete_result_message: # "DBファイルなし" の場合
+            msg_title = "処理スキップ"
+            msg_icon_type = "MSGBOX_INFO"
+            final_status_text = "状態: DBファイルなし。"
+            
+        # 6. ★★★ ここが修正点 ★★★
+        # 準備した「単一の」結果をGUIスレッドに通知
+        gui_queue.put(f"{msg_icon_type}:{msg_title}:{final_msg}")
         gui_queue.put(f"STATUS:{final_status_text}")
+        
+        # ▼▼▼ 削除 ▼▼▼
+        # 以下のブロックは「不要」かつ「間違い」
+        # # 1. 'emails' テーブルから削除 (移植した delete_processed_records を使用)
+        # result_emails = delete_processed_records(days_input, db_path, "emails")
+        # # ... (以下4行すべて削除) ...
+        # ▲▲▲ 削除 ▲▲▲
     
     except Exception as outer_err:
-         gui_queue.put("STATUS: 削除スレッドで重大なエラー。")
-         
+        # この関数自体の予期せぬエラー
+        try:
+            gui_queue.put("STATUS: 削除スレッドで重大なエラー。")
+            gui_queue.put(f"MSGBOX_ERROR:重大なエラー:削除処理中に予期せぬエラーが発生しました。\n{outer_err}")
+        except:
+            pass 
+        
     finally:
+        # 処理が正常終了でもエラーでも、GUIのボタンを有効化するよう通知
         gui_queue.put("DELETION_COMPLETE_ENABLE_BUTTON")
         pass
