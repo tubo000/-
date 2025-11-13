@@ -1,3 +1,4 @@
+
 # main_application.py (★ マルチプロセス化 修正版 ★)
 # (UIフリーズを根本的に解決する)
 # 2025-11-13 更新
@@ -290,10 +291,10 @@ def main():
             messagebox.showerror("入力エラー", "削除日数は 0以上 の整数で指定してください。")
             return
         if days_ago == 0:
-             confirm_prompt = f"🚨 **警告:** データベース内の**すべてのレコード**を削除します。\n"
+             confirm_prompt = f"🚨 警告: データベース内のすべてのレコードを削除します。\n"
         else:
-             confirm_prompt = f"🚨 **警告:** データベース内の **{days_ago}日より古いレコード**を削除します。\n"
-        confirm_prompt += "\n**本当に実行しますか？**"
+             confirm_prompt = f"🚨 警告: データベース内の {days_ago}日(を含む)より古いレコードを削除します。\n"
+        confirm_prompt += "\n本当に実行しますか？"
         
         confirm = messagebox.askyesno("最終確認", confirm_prompt, icon='warning')
         if not confirm:
@@ -351,7 +352,8 @@ def main():
         finally:
              pythoncom.CoUninitialize()
              
-    # --- ▼▼▼ ★★★ check_queue (v5のコードと変更なし) ★★★ ▼▼▼
+# main_application.py の check_queue 関数
+
     def check_queue():
         """ メインスレッドでキューを監視し、GUIを安全に更新する """
         try:
@@ -363,14 +365,42 @@ def main():
                 messagebox.showerror("エラー", message[len("ERROR:"):])
             elif message.startswith("DB_ERROR:"):
                 messagebox.showerror("DB書込エラー", message[len("DB_ERROR:"):])
-            elif message.startswith("MSGBOX:"):
-                parts = message.split(":", 2)
-                title = parts[1]
-                msg_body = parts[2]
-                if "エラー" in title or "警告" in title:
-                    messagebox.showwarning(title, msg_body)
-                else:
+
+            # ▼▼▼ ★★★ ここから修正 ★★★ ▼▼▼
+            # 'MSGBOX:' ではなく、'MSGBOX_...' の各タイプを処理する
+
+            elif message.startswith("MSGBOX_INFO:"):
+                try:
+                    # "MSGBOX_INFO:" の次から分割 (e.g., "タイトル:本文")
+                    parts = message[len("MSGBOX_INFO:"):].split(":", 1)
+                    title = parts[0]
+                    msg_body = parts[1]
                     messagebox.showinfo(title, msg_body)
+                except Exception:
+                    # 予期せぬ形式なら、プレフィックスだけ取って表示
+                    messagebox.showinfo("情報", message[len("MSGBOX_INFO:"):])
+
+            elif message.startswith("MSGBOX_WARNING:"):
+                try:
+                    parts = message[len("MSGBOX_WARNING:"):].split(":", 1)
+                    title = parts[0]
+                    msg_body = parts[1]
+                    messagebox.showwarning(title, msg_body)
+                except Exception:
+                    messagebox.showwarning("警告", message[len("MSGBOX_WARNING:"):])
+
+            elif message.startswith("MSGBOX_ERROR:"):
+                try:
+                    parts = message[len("MSGBOX_ERROR:"):].split(":", 1)
+                    title = parts[0]
+                    msg_body = parts[1]
+                    messagebox.showerror(title, msg_body)
+                except Exception:
+                    messagebox.showerror("エラー", message[len("MSGBOX_ERROR:"):])
+
+            # (古い MSGBOX: の分岐は削除、または上記に吸収される)
+            # ▲▲▲ ★★★ 修正ここまで ★★★ ▲▲▲
+
             elif message == "EXTRACTION_COMPLETE_ENABLE_BUTTON":
                 run_button.config(state=tk.NORMAL)
                 stop_button.config(state=tk.DISABLED)
@@ -401,17 +431,15 @@ def main():
                 active_parent = search_window if (search_window and search_window.winfo_exists()) else root
                 messagebox.showinfo("完了", "処理対象のメールがありませんでした。", parent=active_parent)
                 status_label.config(text="状態: 処理対象のメールがありませんでした。")
-                 
+                
         except queue.Empty:
             pass
         except Exception as e:
             print(f"CRITICAL: check_queue でエラー: {e}")
         finally:
             try:
-                 if root and root.winfo_exists(): root.after(100, check_queue)
+                if root and root.winfo_exists(): root.after(100, check_queue)
             except tk.TclError: pass
-    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
-
     initial_extract_days = None
     if "extract_days_var" in main_elements:
          try: initial_extract_days = main_elements["extract_days_var"].get()
