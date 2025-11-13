@@ -1,4 +1,4 @@
-# gui_search_window.py (ポップアップ追加・レイアウト修正版)
+# gui_search_window.py (★ 高度な正規表現 修正版 ★)
 
 import tkinter as tk
 from tkinter import ttk
@@ -12,12 +12,17 @@ import sqlite3
 from config import DATABASE_NAME 
 import traceback 
 
+# --- ▼▼▼ ★★★ 修正箇所 1: configからパターンをインポート ★★★ ▼▼▼
+from config import (
+    SKILL_LANGUAGE_PATTERNS, POSITION_PATTERNS, OS_PATTERNS
+)
+# --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+
+
 # ==============================================================================
 # 0. 共通ユーティリティ（データ処理ロジック）
 # ==============================================================================
 #キーワードの準備
-
-    #キーワード検索の補足
 KEYWORD_MAPPING = {
     # --- 1. ポジション/ロールの略語変換 (前回の内容 + QA) ---
     'プログラマー': 'PG',
@@ -30,66 +35,167 @@ KEYWORD_MAPPING = {
     'クオリティアシュアランス': 'QA',
     
     # --- 2. 技術の類義語変換 (提供リストから抽出) ---
-    # (中略) ... Python, Java, JavaScript などのマッピング ...
+    'anaconda': 'Python', 'django': 'Python', 'flask': 'Python', 
+    'numpy': 'Python', 'pandas': 'Python', 'scikit-learn': 'Python',
+    'j2ee': 'Java', 'spring': 'Java', 'hibernate': 'Java', 
+    'struts': 'Java', 'mybatis': 'Java', 'jvm': 'Java',
+    'typescript': 'JavaScript', 'ts': 'JavaScript', 'vue js': 'JavaScript', 
+    'react js': 'JavaScript', 'angular': 'JavaScript', 'next js': 'JavaScript', 
+    'nuxt js': 'JavaScript', 'jquery': 'JavaScript',
+    'dotnet': 'C#', 'aspnet': 'C#', 'wpf': 'C#', 'xamarin': 'C#',
+    'vc++': 'C++', 'stl': 'C++', 'boost': 'C++', 
+    'ansi c': 'C言語', 'embedded c': 'C言語', 'posix': 'C言語', 'C':'C言語', 'c':'C言語',
+    'laravel': 'PHP', 'symfony': 'PHP', 'cakephp': 'PHP',
+    'rails': 'Ruby', 'rspec': 'Ruby',
+    'golang': 'Go',
+    'swiftui': 'Swift', 'uikit': 'Swift',
+    'ktor': 'Kotlin',
+    'akka': 'Scala',
+    'dart': 'Flutter',
+    'react native': 'ReactNative',
+    'sass': 'HTML/CSS', 'scss': 'HTML/CSS', 'less': 'HTML/CSS', 'tailwind': 'HTML/CSS', 
+    'bootstrap': 'HTML/CSS',
+    'jest': 'Testing_FE', 'mocha': 'Testing_FE', 'chai': 'Testing_FE', 'cypress': 'Testing_FE', 'selenium': 'Testing_FE',
+    'webpack': 'Bundler', 'babel': 'Bundler', 'rollup': 'Bundler', 'vite': 'Bundler',
+    'mysql': 'SQL', 'postgre': 'SQL', 'oracle': 'SQL', 'ms sql': 'SQL', 't-sql': 'SQL', 
+    'pl/sql': 'SQL', 'transact-sql': 'SQL',
+    'mongodb': 'NoSQL', 'redis': 'NoSQL', 'cassandra': 'NoSQL', 'dynamodb': 'NoSQL',
+    'amazon web services': 'AWS', 'ec2': 'AWS', 's3': 'AWS', 'lambda': 'AWS',
+    'microsoft azure': 'Azure',
+    'google cloud platform': 'GCP',
+    '機械学習': 'ML/DL', '深層学習': 'ML/DL', 'ディープラーニング': 'ML/DL',
+    'hadoop': 'BigData', 'spark': 'BigData', 'kafka': 'BigData', 'etl': 'BigData',
+    'tableau': 'Data_Viz', 'power bi': 'Data_Viz', 'domo': 'Data_Viz',
+    'コンテナ': 'Docker',
+    'k8s': 'Kubernetes', 'kubernates': 'Kubernetes',
+    'ansible': 'Ansible', 'chef': 'Ansible', 'puppet': 'Ansible',
+    'ci/cd': 'CI/CD', 'jenkins': 'CI/CD', 'gitlab ci': 'CI/CD', 'github actions': 'CI/CD', 
+    'circleci': 'CI/CD',
+    'prometheus': 'Monitoring', 'grafana': 'Monitoring', 'zabbix': 'Monitoring', 
+    'new relic': 'Monitoring',
+    'vmware': 'Virtualization', 'hyper-v': 'Virtualization', 'esxi': 'Virtualization',
+    'アジャイル': 'Agile/Scrum', 'スクラム': 'Agile/Scrum',
+    'ウォーターフォール': 'Waterfall',
+    'github': 'Git_VCS', 'gitlab': 'Git_VCS', 'bitbucket': 'Git_VCS',
     'jira': 'Task_Mgt', 'backlog': 'Task_Mgt', 'trello': 'Task_Mgt', 'redmine': 'Task_Mgt',
     }
 
 # ------------------------------------------------------------------------------
-# ▼▼▼【ロジック核心】キーワード検索ロジック (旧 filter_skillsheets_by_keywords) ▼▼▼
+# ▼▼▼【ロジック核心】キーワード検索ロジック (★ v5 ハイブリッド検索 修正版 ★) ▼▼▼
 # ------------------------------------------------------------------------------
 def _execute_keyword_search(df: pd.DataFrame, or_groups: List[List[str]]) -> pd.DataFrame:
     """
     キーワードに基づいて検索を実行する。
-    AND条件 (or_groups = 外側リスト) と OR条件 (or_keywords = 内側リスト) を処理する。
-    
-    Args:
-        df (pd.DataFrame): 検索対象のDataFrame
-        or_groups (List[List[str]]): 
-            検索キーワードのORグループのリスト。
-            例: [['C#'], ['SE', 'PL']] 
-            解釈: (C#) AND (SE OR PL)
+    (★ v5: 高精度/広範囲でロジックを分離 ★)
     """
     if df.empty or not or_groups: 
         return df
 
+    ALL_PATTERNS = {}
+    ALL_PATTERNS.update(SKILL_LANGUAGE_PATTERNS)
+    ALL_PATTERNS.update(POSITION_PATTERNS)
+    ALL_PATTERNS.update(OS_PATTERNS)
+    
+    # 警告(UserWarning)の原因である「キャプチャグループ」を
+    # 「非キャプチャグループ (?:...)」に置換するための正規表現
+    CAPTURE_GROUP_REGEX = re.compile(r'\((?![?!<])')
+
     # --- ヘルパー関数: 1つのORグループ (['SE', 'PL']など) で検索を実行 ---
-    def execute_or_group_search(current_df: pd.DataFrame, or_keywords: List[str], search_cols: List[str]) -> pd.DataFrame:
+    def execute_or_group_search(
+        current_df: pd.DataFrame, 
+        or_keywords: List[str], 
+        search_cols: List[str], 
+        use_config_regex: bool # 👈 ★ 修正: ロジック切り替えフラグ
+    ) -> pd.DataFrame:
         """
         指定されたカラム (search_cols) に対し、
         or_keywords の *いずれか1つでも* 含まれている行を抽出する。
         """
         available_cols = [col for col in search_cols if col in current_df.columns]
         if not available_cols or not or_keywords:
-            return current_df # OR条件がない場合は全件返す (AND条件の一部として)
+            return current_df if use_config_regex else current_df.iloc[0:0] # 高精度の場合は0件
 
-        # 検索対象の列の値を結合し、小文字にする
-        df_search_text = current_df[available_cols].astype(str).fillna(' ').agg(' '.join, axis=1).str.lower()
+        # --- 1. キーワードと正規表現の準備 ---
+        final_regex_patterns = []
+        simple_keywords_normalized = [] # 高精度検索用
         
-        # --- キーワードの正規化 (マッピング辞書を使用) ---
-        processed_or_keywords = []
         for kw in or_keywords:
             kw_stripped = kw.strip()
             if not kw_stripped: continue
-            lower_kw = kw_stripped.lower()
-            mapped_value = KEYWORD_MAPPING.get(lower_kw, lower_kw) # マッピングがあれば置換
-            processed_or_keywords.append(mapped_value.lower())
-        
-        # 重複排除
-        final_or_keywords = list(set(processed_or_keywords))
-        if not final_or_keywords:
-             return current_df
-
-        # --- OR条件のフィルターを作成 ---
-        # (どのキーワードにもヒットしない状態=False) から開始
-        or_filter_condition = pd.Series([False] * len(current_df), index=current_df.index)
-        
-        for lower_keyword in final_or_keywords:
-            # ✅ 正規表現で単語境界 (\b) を使用
-            regex_pattern = r'\b' + re.escape(lower_keyword) + r'\b'
             
-            # (既存のTrue) OR (今回ヒットしたか)
-            or_filter_condition = or_filter_condition | df_search_text.str.contains(regex_pattern, na=False, regex=True)
-                
+            lower_kw = kw_stripped.lower()
+            mapped_value = KEYWORD_MAPPING.get(lower_kw, lower_kw)
+            
+            # --- ▼▼▼ ★★★ 修正箇所 (v5) ★★★ ▼▼▼
+            if use_config_regex:
+                # -------------------------------------------------
+                # 2a. (広範囲検索用) config.py の高度なRegexを使う
+                # -------------------------------------------------
+                found_key = None
+                if mapped_value in ALL_PATTERNS: found_key = mapped_value
+                elif mapped_value.upper() in ALL_PATTERNS: found_key = mapped_value.upper()
+                elif mapped_value.title() in ALL_PATTERNS: found_key = mapped_value.title()
+                elif kw_stripped.upper() in ALL_PATTERNS: found_key = kw_stripped.upper()
+                elif kw_stripped in ALL_PATTERNS: found_key = kw_stripped
+
+                if found_key:
+                    patterns_from_config = ALL_PATTERNS[found_key]
+                    # 警告(UserWarning)対策: ( を (?: に置換
+                    fixed_patterns = [CAPTURE_GROUP_REGEX.sub(r'(?:', p) for p in patterns_from_config]
+                    final_regex_patterns.extend(fixed_patterns)
+                else:
+                    final_regex_patterns.append(r'\b' + re.escape(mapped_value) + r'\b')
+            else:
+                # -------------------------------------------------
+                # 2b. (高精度検索用) 単純な文字列（C# や Java）を使う
+                # -------------------------------------------------
+                simple_keywords_normalized.append(mapped_value.lower())
+            # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+
+        # --- 3. 検索の実行 ---
+        
+        # (OR条件は False (ヒットなし) で初期化)
+        or_filter_condition = pd.Series([False] * len(current_df), index=current_df.index)
+
+        if use_config_regex:
+            # --- (広範囲検索) ---
+            if not final_regex_patterns:
+                return current_df.iloc[0:0] # Regexがないなら0件
+
+            # 改行をスペースに置換し、全列を結合
+            df_search_text = current_df[available_cols].astype(str).fillna(' ').agg(
+                lambda x: ' '.join(x.str.replace(r'[\n\r\t]+', ' ', regex=True)), 
+                axis=1
+            ).str.lower()
+            
+            combined_regex = "|".join(list(set(final_regex_patterns)))
+            try:
+                or_filter_condition = df_search_text.str.contains(
+                    combined_regex, 
+                    na=False, 
+                    regex=True, 
+                    flags=re.IGNORECASE 
+                )
+            except re.error as e:
+                print(f"🚨 正規表現エラー: {e}")
+                pass # or_filter_condition は False のまま
+        else:
+            # --- (高精度検索) ---
+            if not simple_keywords_normalized:
+                return current_df.iloc[0:0] # キーワードがないなら0件
+            
+            # ★ 列（スキル, OS, ポジション）を *個別に* チェック
+            for col in available_cols:
+                col_text_lower = current_df[col].astype(str).str.lower()
+                for simple_kw in simple_keywords_normalized:
+                    # ★ regex=False (単純な文字列検索)
+                    # (例: "java, c#" というセルが "c#" を含むか)
+                    or_filter_condition = or_filter_condition | col_text_lower.str.contains(
+                        simple_kw, 
+                        na=False, 
+                        regex=False 
+                    )
+                    
         return current_df[or_filter_condition]
 
     # --- 検索対象カラムの定義 ---
@@ -100,45 +206,37 @@ def _execute_keyword_search(df: pd.DataFrame, or_groups: List[List[str]]) -> pd.
     # 📌 AND/OR 検索実行
     # ==========================================================
     
-    # 1. 高精度カラム (ポジション, スキル, OS) に対するAND/OR検索
     df_phase2_result = df.copy()
     
-    # 外側リスト (AND条件) でループ
     for or_keywords_list in or_groups:
-        if not or_keywords_list: continue # 空のグループは無視
-        # execute_or_group_search は OR検索結果を返す
-        df_phase2_result = execute_or_group_search(df_phase2_result, or_keywords_list, HIGH_PRECISION_COLS)
-        if df_phase2_result.empty: break # AND条件で0件になったら即終了
+        if not or_keywords_list: continue 
+        # ★ 修正: use_config_regex=False を渡す
+        df_phase2_result = execute_or_group_search(df_phase2_result, or_keywords_list, HIGH_PRECISION_COLS, use_config_regex=False)
+        if df_phase2_result.empty: break 
     
     print(f"INFO: 高精度検索 (P,S,OS) で {len(df_phase2_result)} 件ヒット。")
 
-    # 2. 広範囲カラム (本文, 件名) に対するAND/OR検索
-    
-    # フェーズ2でヒットしたIDを除外
     df_for_phase3 = df.copy()
     if not df_phase2_result.empty and 'ENTRY_ID' in df.columns:
         excluded_ids = df_phase2_result['ENTRY_ID'].unique()
         df_for_phase3 = df[~df['ENTRY_ID'].isin(excluded_ids)].copy()
 
     if df_for_phase3.empty:
-         # 高精度検索だけで全件ヒットしたか、元データが空
-         return df_phase2_result.reset_index(drop=True)
+          return df_phase2_result.reset_index(drop=True)
 
     df_phase3_result = df_for_phase3.copy()
     
-    # 外側リスト (AND条件) でループ
     for or_keywords_list in or_groups:
         if not or_keywords_list: continue
-        df_phase3_result = execute_or_group_search(df_phase3_result, or_keywords_list, BROAD_RANGE_COLS)
+        # ★ 修正: use_config_regex=True を渡す
+        df_phase3_result = execute_or_group_search(df_phase3_result, or_keywords_list, BROAD_RANGE_COLS, use_config_regex=True)
         if df_phase3_result.empty: break
 
-    # --- 💡 広範囲検索でヒットしたレコードの「ポジション」列をクリア (元の要件) ---
     if not df_phase3_result.empty and 'ポジション' in df_phase3_result.columns:
-        df_phase3_result['ポジション'] = '' 
+        df_phase3_result.loc[:, 'ポジション'] = '' 
         
     print(f"INFO: 広範囲検索 (本文,件名) で {len(df_phase3_result)} 件ヒット。")
     
-    # --- 結果の結合 (フェーズ2を上位に、フェーズ3を下位に) ---
     df_final_filtered = pd.concat([df_phase2_result, df_phase3_result]).reset_index(drop=True)
     
     return df_final_filtered
@@ -325,57 +423,38 @@ def filter_skillsheets(df: pd.DataFrame, simple_keywords: List[str], or_groups: 
                 upper_norm = re.sub(r'[^0-9]', '', str(upper))
                 filter_condition = filter_condition & (start_col_target_str <= upper_norm)
             
-            df_filtered_target = df_target[filter_condition].copy() # SettingWithCopyWarning回避のためコピーを推奨
+            df_filtered_target = df_target[filter_condition].copy() 
 
-            # 💡 追加: ソート用の正規化された日付列を一時的に追加
             if not df_filtered_target.empty:
-                # フィルタリングに使用した正規化後の文字列 Series を df_filtered_target のインデックスに合わせて抽出
-                # start_col_target_str は df_target のインデックスを持つため、filter_conditionで絞り込まれたインデックスを使用
-                normalized_dates = start_col_target_str.loc[df_filtered_target.index]
-                
-                # 一時列を作成してソート
                 TEMP_SORT_COL = '__temp_sort_date__'
-                df_filtered_target[TEMP_SORT_COL] = normalized_dates
-
-                # 正規化された日付（早い順 = 昇順）でソート
+                df_filtered_target[TEMP_SORT_COL] = start_col_target_str.loc[df_filtered_target.index]
                 df_filtered_target = df_filtered_target.sort_values(
-                    by=TEMP_SORT_COL,  
+                    by=TEMP_SORT_COL, 
                     ascending=True, 
                     kind='stable'
                 ).drop(columns=[TEMP_SORT_COL]).reset_index(drop=True)
                 
-            # 「即日」のレコードを最上位に配置（即日 > 期間内日付(早い順) > 解析不能）
             df_filtered = pd.concat([df_sokujitsu, df_filtered_target, df_nan], ignore_index=True)
             df_filtered = df_filtered.reset_index(drop=True)
             
-    # すべてのフィルタリングが終わった後、最終結果の並び順を確定させて返却する
     return df_filtered.reset_index(drop=True)
 
-
-
 # ------------------------------------------------------------------------------
-
-
 # ==============================================================================
 # 1. メインアプリケーション（データと画面遷移の管理）
 # ==============================================================================
 
 class App(tk.Toplevel):
-    # (変更なし)
-    # --- ▼▼▼【修正】引数に main_elements を追加 ▼▼▼ ---
     def __init__(self, parent, main_elements: dict, data_frame: pd.DataFrame, open_email_callback, db_has_new_data_var: tk.BooleanVar):
         super().__init__(parent) 
         self.master = parent 
-        self.main_elements = main_elements # ★ main_elements を保存
+        self.main_elements = main_elements 
         self.open_email_callback = open_email_callback
         self.db_has_new_data_var = db_has_new_data_var
-        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         self.title("スキルシート検索アプリ")
         
         # --- ▼▼▼【修正】self.keywords のデータ構造を変更 ▼▼▼ ---
-        # 1. シンプルAND検索用 (カンマ = AND)
         self.keywords: List[str] = [] # 例: ['C#', 'Java']
-        # 2. 高度ORグループ検索用 (カンマ = OR)
         self.or_groups: List[List[str]] = [] # 例: [['SE', 'PL'], ['QA']]
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
         
@@ -408,40 +487,26 @@ class App(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_closing) 
         #self.grab_set()
 
-# --- ▼▼▼【修正】「×」ボタンの処理を安全な終了に変更 ▼▼▼ ---
     def on_closing(self):
-        """「×」ボタンが押されたときの安全な終了処理"""
+        """ (変更なし) """
         self.grab_release() 
-        
         run_button = self.main_elements.get("run_button")
         stop_flag = self.main_elements.get("stop_extraction_flag")
-        
-        is_running = False # 処理中かどうか
+        is_running = False 
         if run_button and str(run_button.cget('state')) == tk.DISABLED:
             is_running = True
-            
         if is_running and stop_flag:
-            # もし処理が実行中なら
             print("INFO: 検索一覧の×ボタン検知。バックグラウンド処理に停止を要求します...")
-            
-            # 1. 中断フラグを立てる
             stop_flag.set()
-            
-            # 2. シャットダウン中フラグを立てる
             self.main_elements["is_shutting_down"] = True
-            
-            # 3. 検索一覧ウィンドウだけを閉じる (メインウィンドウは閉じない)
             try: self.destroy()
             except tk.TclError: pass
-            
         else:
-            # 処理が実行中でなければ、アプリ全体を終了する
             print("INFO: 処理は実行されていません。アプリ全体を終了します。")
-            try: self.master.destroy() # メインウィンドウを閉じる
+            try: self.master.destroy() 
             except tk.TclError: pass 
             try: self.destroy()
             except tk.TclError: pass
-    # --- ▲▲▲ 修正ここまで ▲▲▲ ---
             
     def on_return_to_main(self):
         self.grab_release()
@@ -449,21 +514,15 @@ class App(tk.Toplevel):
         self.destroy()
 
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        main_appから渡された軽量DataFrameをクリーンアップする。
-        (本文 と 添付ファイル内容 はこの時点では含まれていない)
-        """
+        """ (変更なし) """
         if df.empty: return pd.DataFrame()
         try:
             df.columns = df.columns.str.strip()
-            # 📌 修正: '本文' と '添付ファイル内容' のリネームを削除 (渡されないため)
             rename_map = {
                 '単金': '単価', 
                 'スキルor言語': 'スキル', 
                 '名前': '氏名', 
                 '期間_開始':'実働開始',
-                # '本文(テキスト形式)':'本文', # 軽量ロードでは除外
-                # '本文(ファイル含む)':'添付ファイル内容', # 軽量ロードでは除外
                 'メールURL': 'ENTRY_ID'
             }
             if 'EntryID' in df.columns and 'ENTRY_ID' not in df.columns:
@@ -497,10 +556,7 @@ class App(tk.Toplevel):
         self.screen1 = Screen1(self)
         self.current_frame = self.screen1
         self.current_frame.grid(row=0, column=0, sticky='nsew')
-        
-        # --- ▼▼▼【修正】シンプルANDキーワードを復元 ▼▼▼ ---
         # (Screen1側でタグとして描画されるため、Entryへの復元は不要になった)
-        # --- ▲▲▲ 修正ここまで ▲▲▲ ---
 
     def _set_screen1_keywords(self, keywords_str):
         # (Screen1のUI変更に伴い、この関数はもう使われない)
@@ -526,22 +582,15 @@ class App(tk.Toplevel):
 
         if self.db_has_new_data_var and self.db_has_new_data_var.get():
             print("INFO: 新規データを検出。Screen2表示時に自動で一覧を更新します...")
-            # 画面が描画されるのを少し待ってから自動更新を実行
             self.after(100, self.auto_refresh_on_startup)
-        # ★★★ 修正ここまで ★★★
  
- 
-    # ★★★ このメソッドを App クラス内に「追加」 ★★★
     def auto_refresh_on_startup(self):
-        """起動時の自動更新処理 (show_screen2 から呼ばれる)"""
+        """ (変更なし) """
         try:
-            # 現在の画面が Screen2 であることを確認
             if self.current_frame and isinstance(self.current_frame, Screen2):
-                # Screen2 の refresh_data_from_db メソッドを直接呼び出す
                 print("DEBUG: auto_refresh_on_startup が refresh_data_from_db を呼び出します。")
                 self.current_frame.refresh_data_from_db()
             elif self.screen2:
-                # current_frame が設定されるのが遅れる場合も想定
                 print("DEBUG: auto_refresh_on_startup (fallback) が refresh_data_from_db を呼び出します。")
                 self.screen2.refresh_data_from_db()
             else:
@@ -549,7 +598,6 @@ class App(tk.Toplevel):
         except Exception as e:
             print(f"ERROR: 起動時の自動更新に失敗しました: {e}")
             traceback.print_exc()
-
 
 # ==============================================================================
 # 2. 画面1: 検索条件の入力
