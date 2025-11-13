@@ -1383,28 +1383,62 @@ class Screen2(ttk.Frame):
         self.body_text.config(state='disabled')
         print("DEBUG: 両方の本文デバッグ情報の表示が完了しました。")
 
+# gui_search_window.py (Screen2 クラス内)
+
     def apply_highlights(self, keywords: List[str]):
-        # (変更なし)
+        """
+        Textウィジェットに表示された全文に対して、
+        ★「最初の100件まで」★ のキーワードハイライトを非同期で適用する
+        (★ v3w 色が付かないバグ修正版 ★)
+        """
+        
+        HIGHLIGHT_LIMIT = 100 
+        
         if not keywords:
             return 
+            
         try:
             self.body_text.config(state='normal')
+            
+            # 既存のハイライトをすべて削除
             self.body_text.tag_remove("highlight", 1.0, tk.END)
-            if "highlight" not in self.body_text.tag_names():
-                self.body_text.tag_configure(                    "highlight", 
-                    background="yellow", 
-                    foreground="black"                )
+            
+            # --- ▼▼▼ ★★★ 修正箇所 ★★★ ▼▼▼
+            # if "highlight" not in self.body_text.tag_names(): 
+            # 
+            # 👆 この if チェックを「削除」し、毎回必ずタグを(再)定義する
+            # (これにより、タグ定義が失われても色が必ず付くようになる)
+            self.body_text.tag_configure(
+                "highlight", 
+                background="yellow", 
+                foreground="black"
+            )
+            # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+
             full_text = self.body_text.get(1.0, tk.END)
             if not full_text:
                 self.body_text.config(state='disabled')
                 return
-            full_text_lower = full_text.lower()
+
+            full_text_lower = full_text.lower() 
+            
+            total_hits = 0 
+
             for kw in keywords:
                 if not kw.strip():
-                    continue                                
-                kw_lower = kw.lower()                
+                    continue
+                
+                if total_hits >= HIGHLIGHT_LIMIT: 
+                    break 
+
+                kw_lower = kw.lower()
                 start_index = 0
+                
                 while True:
+                    if total_hits >= HIGHLIGHT_LIMIT:
+                        print(f"INFO: ハイライトは {HIGHLIGHT_LIMIT} 件で打ち切りました。")
+                        break 
+
                     start_index = full_text_lower.find(kw_lower, start_index)
                     if start_index == -1:
                         break 
@@ -1416,14 +1450,20 @@ class Screen2(ttk.Frame):
                     self.body_text.tag_add("highlight", start_tk_index, end_tk_index)
                     
                     start_index = end_index 
-        except Exception as e:
-            print(f"ハイライト処理中にエラー: {e}")
+                    total_hits += 1 
             
+            print(f"INFO: ハイライト処理完了。合計 {total_hits} 件をタグ付けしました。")
+
+        except Exception as e:
+            print(f"ERROR: ハイライト処理中にエラー: {e}")
+            traceback.print_exc()
         finally:
             self.body_text.config(state='disabled')
 
+# gui_search_window.py (Screen2 クラス内)
+
     def update_display_area(self, content_type: str):
-        # (変更なし - DBオンデマンド読み込み)
+        # (DBオンデマンド読み込み)
         selected_items = self.tree.selection()
         if not selected_items: return
         item_id = selected_items[0]
@@ -1435,6 +1475,8 @@ class Screen2(ttk.Frame):
         self.body_text.config(state='disabled')
         self.master.update_idletasks() 
 
+        full_text_content = "" # 👈 ★ ハイライト処理で使うため、tryの外で定義
+
         try:
             tree_columns = list(self.tree['columns'])
             if 'ENTRY_ID' not in tree_columns:
@@ -1445,11 +1487,11 @@ class Screen2(ttk.Frame):
                 raise IndexError("選択行の値リストが短すぎます。")
             entry_id = str(tree_values[id_index])
             if not entry_id or entry_id == 'N/A':
-                raise ValueError("有効な EntryID が取得できませんでした。")
+                 raise ValueError("有効な EntryID が取得できませんでした。")
 
             db_path = os.path.abspath(DATABASE_NAME)
             if not os.path.exists(db_path):
-                raise FileNotFoundError(f"データベース {DATABASE_NAME} が見つかりません。")
+                 raise FileNotFoundError(f"データベース {DATABASE_NAME} が見つかりません。")
             
             conn = None
             try:
@@ -1458,7 +1500,7 @@ class Screen2(ttk.Frame):
                 
                 allowed_cols = ["本文(テキスト形式)", "本文(ファイル含む)", "スキル", "件名", "本文"] 
                 if content_type not in allowed_cols:
-                    raise ValueError(f"不正なカラム名 {content_type} が指定されました。")
+                     raise ValueError(f"不正なカラム名 {content_type} が指定されました。")
                 
                 query = f"SELECT \"{content_type}\" FROM emails WHERE \"EntryID\" = ?"
                 cursor.execute(query, (entry_id,))
@@ -1469,19 +1511,23 @@ class Screen2(ttk.Frame):
                     if pd.notna(full_data) and str(full_data).strip() != '':
                         full_text_content = str(full_data).replace('_x000D_', '\n')
                         
-                        # (中略) ... テキスト整形ロジック ...
+                        # --- ▼▼▼ ★★★ 修正 (v20のバグ修正) ★★★ ▼▼▼
+                        # 1. 1回目の置換
                         target_keywords = r'(\s*(最寄り駅|勤務地|スキル|単価|業務内容|必須スキル|歓迎スキル))' 
                         formatted_content = re.sub(
                             r'([^\n]|^)' + target_keywords, 
                             r'\1\n\2', 
                             full_text_content
                         )
+                        # 2. 2回目の置換 (full_text_content ではなく formatted_content を使う)
                         target_chars = r'[■【━―─=最氏所単稼]' 
                         formatted_content = re.sub(
-                        r'([^\n]|^)(' + target_chars + '+)', 
-                        r'\1\n\2', 
-                        full_text_content
-                    )
+                            r'([^\n]|^)(' + target_chars + '+)', 
+                            r'\1\n\2', 
+                            formatted_content # 👈 ★ 修正
+                        )
+                        # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+                        
                         cleaned_content = formatted_content.strip()
                         cleaned_content = re.sub(r'\n{3,}', '\n\n', cleaned_content)
                         lines = cleaned_content.split('\n')
@@ -1491,28 +1537,44 @@ class Screen2(ttk.Frame):
                         
                         display_text = '\n'.join(final_formatted_content)
                         
-                        # ( _debug_keyword_extraction は修正済みが呼ばれる )
-                        self._debug_keyword_extraction(entry_id, content_type, full_text_content)
                     else:
                         display_text = f"{content_type} のデータが空です。"
                 else:
                     display_text = f"データベースで EntryID '{entry_id}' が見つかりません。"
             except Exception as db_err:
-                print(f"DB読み込みエラー (update_display_area): {db_err}")
-                display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
+                 print(f"DB読み込みエラー (update_display_area): {db_err}")
+                 display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
             finally:
                 if conn: conn.close()
 
             # 最終的な表示処理
             self.body_text.config(state='normal') 
             self.body_text.delete(1.0, tk.END) 
+            
+            # --- ▼▼▼ ★★★ 修正 (v20のバグ修正) ★★★ ▼▼▼
+            # (挿入するのは整形後の display_text)
             self.body_text.insert(tk.END, display_text) 
+            # --- ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲ ---
+            
             self.body_text.config(state='disabled')
         except Exception as e:
             print(f"ERROR: テキストの挿入に失敗: {e}")
             self.body_text.config(state='disabled')
             return
         
+        # --- ▼▼▼ ★★★ ハイライト適応コード ★★★ ▼▼▼
+        # (v20のコード をv3sのロジック に合わせて修正)
+        
+        # 1. シンプル(AND)と高度(OR)の両方のキーワードをフラット化（平坦化）
+        simple_keywords = getattr(self.master, 'keywords', [])
+        or_groups = getattr(self.master, 'or_groups', [])
+        flat_or_keywords = [item for sublist in or_groups for item in sublist]
+        keywords_to_highlight = list(set(simple_keywords + flat_or_keywords))
+
+        # 2. キーワードが1つでもあれば、50ミリ秒後にハイライト処理を実行
+        if keywords_to_highlight: 
+            self.after(50, lambda: self.apply_highlights(keywords_to_highlight))
+        # --- ▲▲▲ ★★★ 適応コードここまで ★★★ ▲▲▲
     # ------------------------------------------------------------------------------
     # ▼▼▼【UI核心】Screen2 の タグ/キーワード管理機能 (Screen1とほぼ同等) ▼▼▼
     # ------------------------------------------------------------------------------
