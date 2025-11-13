@@ -5,9 +5,10 @@ import pandas as pd
 import re
 import math # 単金処理のためにmathをインポート
 import datetime             # 💡 追加: 日付処理用
-from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS
+from config import MASTER_COLUMNS, ITEM_PATTERNS, PROCESS_KEYWORDS,SKILL_LANGUAGE_PATTERNS,POSITION_PATTERNS,OS_PATTERNS
 # 📌 修正1: configから高度な抽出ロジックの正規表現をインポート
 from config import RE_AGE_PATTERNS, RE_TANAKA_KW_PATTERNS, RE_TANAKA_RAW_PATTERNS, KEYWORD_TANAKA
+
 
 # 実働開始日の優先度ランキングを定義 (値が小さいほど高優先度)
 DATE_RANKING = {
@@ -71,7 +72,7 @@ def process_start_date(date_str):
     if month_match: return f"{month_match.group(1)}ヶ月", DATE_RANKING['DURATION'] 
     
     # --- 2. 即日/ASAPの処理 ---
-    if '即日' in date_str_lower or 'asap' in date_str_lower or re.match(r'^即[～~]?$', date_str_lower): 
+    if '即日' in date_str_lower or 'asap' in date_str_lower or re.match(r'^即日[～~]?$',r'即(!?戦力)[～~]?$', date_str_lower): 
         return '即日', DATE_RANKING['DURATION']
     
     # --- 3. yyyy[区切り文字]mm... 形式の処理 (DATE_FULL) ---
@@ -359,10 +360,12 @@ def process_tanaka(tanaka_str: str) -> str:
     
     # 1. 範囲指定の処理
     if ('~' in tanaka_str or '～' in tanaka_str or '-' in tanaka_str):
+    # この行で、半角チルダ(~)やハイフン(-)が全角チルダ(～)に統一されます
         range_str = tanaka_str.replace('万', '').replace('円', '').replace('~', '～').replace('-', '～')
-        parts = re.split(r'～', range_str)
+    
+        parts = re.split(r'～', range_str) # 全角チルダで分割
         if all(re.match(r'^\d+(\.\d+)?$', part) for part in parts) and len(parts) == 2:
-             return range_str
+            return range_str # (例: '115～125' が返る)
         return 'nan'
     
     # 2. 単一値の処理
@@ -453,6 +456,7 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
         
         mail_body_for_display = str(row.get('本文(テキスト形式)', 'N/A'))
         file_body_for_display = str(row.get('本文(ファイル含む)', 'N/A'))
+        Attachments_body_for_display = str(row.get('Attachments', 'N/A'))
 
         extracted_data = {'EntryID': mail_id, '件名': row.get('件名', 'N/A'), '宛先メール': row.get('宛先メール', 'N/A')} 
         reliability_scores = {} 
@@ -531,6 +535,98 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
                 if score > current_score:
                     extracted_data[base_item_name] = cleaned_val
                     reliability_scores[base_item_name] = score
+
+            # --- 2.5. スキル・言語の抽出 (新規追加) ---
+        extracted_skills = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+       # --- ▼▼▼ 修正後の PDF存在チェック (文字列検索) ▼▼▼ ---
+        # Attachments_body_for_display (カンマ区切りのファイル名文字列) 内に
+        # ".pdf" (大文字小文字無視、単語境界付き) が含まれるかチェックする
+        # r'\.pdf\b' は、".pdf" が単語の終わりにくる（つまり拡張子として使われている）ことを確認します。
+        has_pdf_attachment = bool(re.search(r'\.pdf\b', Attachments_body_for_display, re.IGNORECASE))
+        # --- ▲▲▲ 修正後の PDF存在チェック (文字列検索) ▲▲▲ ---
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for skill_name, patterns in SKILL_LANGUAGE_PATTERNS.items():
+                if has_pdf_attachment and skill_name == 'C':
+            # PDFがあるため 'C' の抽出は禁止
+                    continue
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_skills.add(skill_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_skills:
+            extracted_data['スキルor言語'] = ", ".join(sorted(list(extracted_skills)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['スキルor言語'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
+
+        # --- 2.6. ポジションの抽出 (新規追加) ---
+        extracted_position = set()
+    # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A':
+        # 📌 修正1: 大文字変換も小文字変換も行わず、元の search_text を使用
+        
+        # 📌 修正2: SALESFORCE のチェック用に大文字バージョンを作成し直す
+        # ただし、SE以外のパターンで大文字・小文字を区別しない場合は、元のパターン定義を調整する必要があります。
+            search_text_upper = search_text.upper() 
+
+            for position_name, patterns in POSITION_PATTERNS.items():
+                for pattern in patterns:
+                # 📌 修正3: 大文字・小文字を区別してマッチング (re.IGNORECASEなし)
+                # POSITION_PATTERNS の中の 'SE' のパターンが r'\bS[\.\s-]*E...' のように大文字で定義されている必要があります。
+                    if re.search(pattern, search_text): 
+                        extracted_position.add(position_name)
+                        break
+                    
+            if 'SE' in extracted_position:
+            # 📌 修正4: SALESFORCE のチェックを大文字バージョンに戻す
+            # これにより、本文中に「SALESFORCE」と大文字で記述されている場合のみ除外されます。
+                if "SALESFORCE" in search_text_upper: 
+                    extracted_position.remove('SE')
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        if extracted_position:
+            extracted_data['ポジション'] = ", ".join(sorted(list(extracted_position)))
+        else:
+        # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['ポジション'] = math.nan
+
+        # --- 2.7. OSの抽出 (新規追加) ---
+        extracted_OS = set()
+        
+        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
+        #    (これらの変数は、このループの冒頭ですでに定義されています)
+        search_text = mail_body_for_display + " " + file_body_for_display
+
+        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
+            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+            for OS_name, patterns in OS_PATTERNS.items():
+                for pattern in patterns:
+                    # 大文字小文字を無視してマッチング
+                    if re.search(pattern, search_text, re.IGNORECASE):
+                        extracted_OS.add(OS_name)
+                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
+                        break 
+
+        # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
+        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
+        if extracted_OS:
+            extracted_data['OS'] = ", ".join(sorted(list(extracted_OS)))
+        else:
+            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['OS'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
             
         # --- 3. 開発工程フラグの判定 (変更なし) ---
         for proc_name, keywords in PROCESS_KEYWORDS.items():
@@ -562,11 +658,38 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
     
     if '本文(抽出元結合)' in df_extracted.columns:
         df_extracted = df_extracted.drop(columns=['本文(抽出元結合)']) 
+        FILTER_COLS_FOR_DELETION = [
+        'スキルor言語', 'ポジション', 'OS', '年齢', '単金', '期間_開始'
+    ]
+    
+    # 2. フィルタリング対象の列が全てデータフレームに含まれているか確認
+    cols_present = [col for col in FILTER_COLS_FOR_DELETION if col in df_extracted.columns]
+    
+    if cols_present:
+        # 3. 欠損値チェック用のデータフレームを準備
+        # 'nan'文字列も欠損として扱うために、math.nan (NaN) に置換します。
+        # (抽出ロジックで欠損値として math.nan または文字列 'nan' が格納されているため)
+        
+        # まず、データフレームをオブジェクト型に変換して置換がスムーズに行えるようにします。
+        df_check = df_extracted[cols_present].copy()
+        
+        # 文字列 'nan' および空文字列 '' を Pandas の欠損値 (NaN) に統一
+        df_check = df_check.replace({'nan': pd.NA, '': pd.NA})
+        
+        # 4. 各行の対象列全てが欠損値 (NaN/pd.NA) であるかを確認
+        # .notna().any(axis=1) : 行ごとに一つでも非欠損値があれば True
+        # ~ (チルダ) : 全て欠損値の行(False)をTrueに反転
+        rows_to_keep = df_check.notna().any(axis=1)
+        
+        # 5. フィルタリングを実行: 全て欠損値の行を除外 (データベース書き込み前のデータフレームから削除)
+        df_extracted = df_extracted[rows_to_keep].reset_index(drop=True)
+        
+    # --- ▲▲▲ ここまで追加 ▲▲▲ ---
         
     all_cols_in_order = [
         'EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 
-        'Attachments', '信頼度スコア'
-    ] + [col for col in MASTER_COLUMNS if col not in ['EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments', '信頼度スコア', '本文(抽出元結合)']]
+        'Attachments', '信頼度スコア','ポジション'
+    ] + [col for col in MASTER_COLUMNS if col not in ['EntryID', '件名', '宛先メール', '本文(テキスト形式)', '本文(ファイル含む)', 'Attachments', '信頼度スコア','ポジション', '本文(抽出元結合)']]
     
     df_extracted = df_extracted.reindex(columns=[c for c in all_cols_in_order if c in df_extracted.columns], fill_value='N/A')
     df_extracted = df_extracted.astype(str)

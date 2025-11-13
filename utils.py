@@ -23,7 +23,8 @@ def load_config_csv():
     except (pd.errors.EmptyDataError, FileNotFoundError):
         pass
     except Exception as e:
-        print(f"DEBUG: CSV設定ファイルの読み込み中にエラーが発生しました: {e}")
+        #(f"DEBUG: CSV設定ファイルの読み込み中にエラーが発生しました: {e}")
+        pass
     return "", TARGET_FOLDER_PATH 
 
 def save_config_csv(account_name):
