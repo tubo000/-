@@ -83,44 +83,31 @@ SKILL_LANGUAGE_PATTERNS = {
         r'\bVC\+\+\b', r'\bSTL\b', r'Boost'
     ],
     "C言語": [
-        # C や C B、C の後に評価文字や空白のみが続かないことを否定
-        r'\bC\b(?!#|\+\+|\s*([A-D１-４ア-エ]|$))', 
-        r'\bANSI C\b', r'\bEmbedded C\b', r'POSIX'
+    # 1. 基本的なC言語の表記 (C、C言語)
+    # C/C言語の直後に #, ++ がないことを確認し、その後に空白またはカンマが続くことを必須とする
+    r'\bC\s*(言語)?\b(?![#\+\+])(?=[\s,])', 
+    
+    # 2. スラッシュ区切りの中のCに対応 (例: Java/C/C#)
+    r'(?<![A-Z])/(C)/(?![A-Z])',
+    
+    # 3. Visual Cに対応 (VC++との混同を避けるため、VC+ではないことを確認)
+    r'\b(VC(?!+)|Visual C)\b', 
+    
+    # 4. 標準規格と組み込み
+    r'\bANSI C\b', 
+    r'\bEmbedded C\b', 
+    r'POSIX'
     ],
     "PHP": [
         # PHP の後に評価文字や空白のみが続かないことを否定
         r'\bPHP\b(?!\s*([A-D１-４ア-エ]|$))', 
         r'Laravel', r'Symfony', r'CakePHP'
     ],
-    "Ruby": [
-        # Ruby の後に評価文字や空白のみが続かないことを否定
-        r'\bRuby\b(?!\s*([A-D１-４ア-エ]|$))', 
-        r'Rails', r'RSpec'
-    ],
-    "Go": [
-        # Go の後に評価文字や空白のみが続かないことを否定
-        r'\bGo\b(?!\s*([A-D１-４ア-エ]|$))', 
-        r'Golang'
-    ],
-    "Swift": [r'\bSwift\b', r'SwiftUI', r'UIKit'],
-    "Kotlin": [r'\bKotlin\b', r'Ktor'],
-    "Scala": [r'\bScala\b', r'Akka'],
-    "SAS": [r'\bSAS\b(?! Institute)', r'SAS\s*Language', r'SAS/STAT', r'SAS/GRAPH'],
-    "ShellScript": [r'Shell Script', r'\bBash\b', r'\bsh\b', r'PowerShell'],
-    "VBA": [r'\bVBA\b', r'Excel VBA', r'マクロ'],
-    
+
     # ----------------------------------------------------
     # 追加: フロントエンド技術 (Frontend Technologies)
     # ----------------------------------------------------
     "HTML/CSS": [r'\bHTML(5)?\b', r'\bCSS(3)?\b', r'Sass', r'SCSS', r'Less', r'Tailwind\b', r'Bootstrap'],
-    "Testing_FE": [r'Jest', r'Mocha', r'Chai', r'Cypress', r'Selenium'],
-    "Bundler": [r'Webpack', r'Babel', r'Rollup', r'Vite'],
-    
-    # ----------------------------------------------------
-    # 追加: モバイル開発 (Mobile Development)
-    # ----------------------------------------------------
-    "Flutter": [r'Flutter', r'Dart'],
-    "ReactNative": [r'React\s*Native'],
 
     # ----------------------------------------------------
     # データベース言語 (SQL/NoSQL)
@@ -137,7 +124,6 @@ SKILL_LANGUAGE_PATTERNS = {
     # ----------------------------------------------------
     "AWS": [r'\bAWS\b', r'\bAmazon\s*Web\s*Services\b', r'EC2', r'S3', r'Lambda'],
     "Azure": [r'\bAzure\b', r'Microsoft\s*Azure'],
-    "GCP": [r'\bGCP\b', r'Google\s*Cloud\s*Platform'],
     # ----------------------------------------------------
     # AI・データサイエンス (AI/Data Science)
     # ----------------------------------------------------
@@ -156,42 +142,57 @@ SKILL_LANGUAGE_PATTERNS = {
     "CI/CD": [r'CI/CD', r'Jenkins', r'GitLab\s*CI', r'GitHub\s*Actions', r'CircleCI'],
     "Monitoring": [r'Prometheus', r'Grafana', r'Zabbix', r'New\s*Relic'],
     "Virtualization": [r'VMware', r'Hyper-V', r'\bESXi\b'],
-    # ----------------------------------------------------
-    # 開発手法・ツール (Methodologies/Tools)
-    # ----------------------------------------------------
-    "Agile/Scrum": [r'アジャイル', r'Agile', r'スクラム', r'Scrum'],
-    "Waterfall": [r'ウォーターフォール'],
-    "Git_VCS": [r'\bGit\b', r'GitHub', r'GitLab', r'Bitbucket'],
-    "Task_Mgt": [r'Jira', r'Backlog', r'Trello', r'Redmine']
-}
+    }
 
 POSITION_PATTERNS = {
     'PM': [
-        r'\bP[\.\s-]*M(?!O)\b[とはで]|\bP[\.\s-]*M(?!O)\s*[経験]|プロジェクト\s*マネー[ジ|ジャ|ヤ][ャー|ー]|プロマネ',
+        r'\bP[\.\s-]*M(?!O)\b[とはで]', 
+        r'\bP[\.\s-]*M(?!O)\s*[経験]', 
+        r'プロジェクト\s*マネー[ジ|ジャ|ヤ][ャー|ー]',
+        r'プロマネ',
     ],
-    # 🌟 PLの正規表現リストをカンマで区切り、文法を修正
     'PL': [
-        # 複合略語 (MO/PL, PL&SQ) はそのまま維持
         r'\bMO[\/\s-]*P[\.\s-]*L\b', 
         r'\bP[\.\s-]*L[\/\&\s-]*S[\.\s-]*Q\b', 
-        # 💡 PLの略語を(PL|P\.L|P-L)のように厳格化し、誤検出を防ぐ
-        r'\b(PL|P\.L|P-L)\b[とはで]|\b(PL|P\.L|P-L)\s*[経験]',
-        # 正式名称
-        r'プロジェクト\s*リー[ダ|ダー|ド]|プロ[リ|リダ]|リーダ', 
+        r'\b(PL|P\.L|P-L)\b[とはで]',
+        r'\b(PL|P\.L|P-L)\s*[経験]',
+        r'プロジェクト\s*リー[ダ|ダー|ド]',
+        r'プロ[リ|リダ]',
+        r'リーダ', 
     ],
-    # SEはリストが閉じられていないため、適切に修正（最後の要素の後にカンマがない）
     'SE': [
-        r'\bS[\.\s-]*E(?!S)\b[とはで]|\bS[\.\s-]*E(?!S)\bとして|\bS[\.\s-]*E(?!S)\s*[経験作業]|システム\s*エンジニ[ア|ヤ]|シスエン',
-        r'\b/[\/\s-]*S[\.\s-]*E\b',
-        r'社内\s*SE',
-        r'社内\s*システム\s*エンジニ[ア|ヤ]',
+        # ★★★ 危険な広範囲マッチパターンを削除 ★★★
+        
+        # 0. 複合略語パターンを略語として厳密化
+        r'\b[A-Za-z\.-]+?[\/\s-]+S[\.\s-]*E(?!S|O|J)\b', 
+        r'\bS[\.\s-]*E(?!S|O|J)[\/\s-]+[A-Za-z\.-]+?\b',
+        
+        # 💡 漢字複合略語 (広範囲マッチを含むパターンは削除)
+        r'\b[基本設計実装][\/\s-]*S[\.\s-]*E(?!S|O|J)\b', 
+
+        # 1. 漢字・語尾付きのパターン: (末尾の .*? を削除)
+        r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\s*[経験職種役割要員歴]', 
+        
+        # 2. 助詞付きのパターン:
+        r'\bS[\.\s-]*E(?!S|O|J)(?![a-zA-Z])\b[とはで]', 
+        
+        # 3. 正式名称/略称
+        r'システム\s*エンジニ[ア|ヤ]|シスエン',
+        
+        # 4. 社内SEの追加
+        r'社内\s*SE|社内\s*システム\s*エンジニ[ア|ヤ]',
     ],
+    # ★★★ PGのパターンを修正 ★★★
     'PG': [
-        r'\bPG\b[^\w]*'
-        r'\b(?<!R)P[\.\s-]*G\b[とはで]|\bP[\.\s-]*G\s*[経験作業]|プログラマ|プログラマー', 
+        r'\b(?<!R)PG\b[とはで]', 
+        r'\b(?<!R)P[\.\s-]*G\b[とはで]', 
+        r'\b(?<!R)P[\.\s-]*G\s*[経験作業]', 
+        r'プログラマ|プログラマー',
     ],
     'QA': [
-       r'\bQ[\.\s-]*A\s*(エンジニ[ア|ヤ]|経験|業務|として|[とはでがにをの])|品質\s*保証|テスト\s*エンジニ[ア|ヤ]|テスタ',
+        r'\bQ[\.\s-]*A\s*(エンジニ[ア|ヤ]|経験|業務|として|[とはでがにをの])',
+        r'品質\s*保証',
+        r'テスト\s*エンジニ[ア|ヤ]|テスタ',
     ],
 }
 
@@ -223,8 +224,8 @@ NOISE = [
 # ----------------------------------------------------
 # 必須キーワード/除外キーワードの定義 (Outlookフィルタリング用)
 # ----------------------------------------------------
-MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材のご紹介', r'リソース']
-EXCLUDE_KEYWORDS = [r'案\s*件\s*名',r'案\s*件\s*番\s*号',r'案\s*件:',r'案\s*件：',r'【案\s*件】',r'概\s*要',r'必\s*須',r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請']
+MUST_INCLUDE_KEYWORDS = [r'スキルシート', r'業務経歴書', r'人材のご紹介', r'リソース'] # 必須キーワード
+EXCLUDE_KEYWORDS = [r'請求書', r'セミナー', r'お問い合わせ', r'休暇申請',r'契約書',r'誓約書',r'案\s*件\s*名',r'作\s*業\s*概\s*要'] # 除外キーワード
 # ----------------------------------------------------
 
 # 年齢の正規表現 
@@ -233,12 +234,17 @@ NEGATIVE_LOOKAHEAD_DATE = r'(?!\s*(?:年|月|日|/|-|\)))'
 
 # 年齢の多様なパターン（必須キーワード付き、単位付き、単位なし）
 RE_AGE_KEYWORD = r'[【\[（\(]?\s*年\s*齢\s*[】\]）\)]?[\s:：]*' + AGE_PATTERN_2_DIGITS + r'[歳才]'
-RE_AGE_PARENTHESIS = r'[a-zA-Z\s\.]+ *[（\(].*?' + AGE_PATTERN_2_DIGITS + r'[歳才].*?[）\)]' 
+RE_AGE_PARENTHESIS = r'.*?[（\(].*?' + AGE_PATTERN_2_DIGITS + r'[歳才].*?[）\)]'
 RE_AGE_AFTER_NAME = r'[a-zA-Z\s\.]+\s+' + AGE_PATTERN_2_DIGITS + r'[歳才]'
+RE_AGE_SLASH_OR_DELIMITER = r'[a-zA-Z0-9\s\./-]*' + AGE_PATTERN_2_DIGITS + r'[歳才]'
 RE_AGE_KEYWORD_NO_UNIT = r'[【\[（\(]?\s*年\s*齢\s*[】\]）\)]?[\s:：]*' + AGE_PATTERN_2_DIGITS + NEGATIVE_LOOKAHEAD_DATE
 #優先順位
 RE_AGE_PATTERNS = [
-RE_AGE_KEYWORD, RE_AGE_PARENTHESIS, RE_AGE_AFTER_NAME, RE_AGE_KEYWORD_NO_UNIT
+RE_AGE_KEYWORD, 
+RE_AGE_PARENTHESIS, 
+RE_AGE_AFTER_NAME, 
+RE_AGE_SLASH_OR_DELIMITER,
+RE_AGE_KEYWORD_NO_UNIT
 ] # 抽出関数で使用
 
 # 単金の正規表現 

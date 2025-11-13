@@ -359,10 +359,12 @@ def process_tanaka(tanaka_str: str) -> str:
     
     # 1. 範囲指定の処理
     if ('~' in tanaka_str or '～' in tanaka_str or '-' in tanaka_str):
+    # この行で、半角チルダ(~)やハイフン(-)が全角チルダ(～)に統一されます
         range_str = tanaka_str.replace('万', '').replace('円', '').replace('~', '～').replace('-', '～')
-        parts = re.split(r'～', range_str)
+    
+        parts = re.split(r'～', range_str) # 全角チルダで分割
         if all(re.match(r'^\d+(\.\d+)?$', part) for part in parts) and len(parts) == 2:
-             return range_str
+            return range_str # (例: '115～125' が返る)
         return 'nan'
     
     # 2. 単一値の処理
@@ -559,28 +561,36 @@ def extract_skills_data(mail_data_df: pd.DataFrame) -> pd.DataFrame:
 
         # --- 2.6. ポジションの抽出 (新規追加) ---
         extracted_position = set()
-        
-        # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
-        #    (これらの変数は、このループの冒頭ですでに定義されています)
+    # 1. 検索対象テキストを '本文(テキスト形式)' と '本文(ファイル含む)' から構築
         search_text = mail_body_for_display + " " + file_body_for_display
 
-        if search_text and search_text != 'N/A N/A': # 検索対象テキストがある場合のみ実行
-            # config.py の SKILL_LANGUAGE_PATTERNS を使用
+        if search_text and search_text != 'N/A N/A':
+        # 📌 修正1: 大文字変換も小文字変換も行わず、元の search_text を使用
+        
+        # 📌 修正2: SALESFORCE のチェック用に大文字バージョンを作成し直す
+        # ただし、SE以外のパターンで大文字・小文字を区別しない場合は、元のパターン定義を調整する必要があります。
+            search_text_upper = search_text.upper() 
+
             for position_name, patterns in POSITION_PATTERNS.items():
                 for pattern in patterns:
-                    # 大文字小文字を無視してマッチング
-                    if re.search(pattern, search_text, re.IGNORECASE):
+                # 📌 修正3: 大文字・小文字を区別してマッチング (re.IGNORECASEなし)
+                # POSITION_PATTERNS の中の 'SE' のパターンが r'\bS[\.\s-]*E...' のように大文字で定義されている必要があります。
+                    if re.search(pattern, search_text): 
                         extracted_position.add(position_name)
-                        # 一度マッチしたら、そのスキル名に対する他のパターンはスキップ
-                        break 
+                        break
+                    
+            if 'SE' in extracted_position:
+            # 📌 修正4: SALESFORCE のチェックを大文字バージョンに戻す
+            # これにより、本文中に「SALESFORCE」と大文字で記述されている場合のみ除外されます。
+                if "SALESFORCE" in search_text_upper: 
+                    extracted_position.remove('SE')
 
         # 2. 抽出結果を、ご要望の既存カラム 'スキルor言語' に格納
-        #    (注意: これにより、ITEM_PATTERNSによる古い'スキルor言語'の抽出は上書きされます)
         if extracted_position:
             extracted_data['ポジション'] = ", ".join(sorted(list(extracted_position)))
         else:
-            # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
-            extracted_data['ポジション'] = math.nan # math.nan は、ファイル冒頭で import された math に含まれる
+        # 抽出結果が空の場合、nanを格納（pandasが欠損値として扱えるようにする）
+            extracted_data['ポジション'] = math.nan
 
         # --- 2.7. OSの抽出 (新規追加) ---
         extracted_OS = set()
