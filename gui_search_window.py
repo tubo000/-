@@ -107,7 +107,6 @@ def _execute_keyword_search(df: pd.DataFrame, or_groups: List[List[str]]) -> pd.
         df_phase2_result = execute_or_group_search(df_phase2_result, or_keywords_list, HIGH_PRECISION_COLS)
         if df_phase2_result.empty: break # AND条件で0件になったら即終了
     
-    print(f"INFO: 高精度検索 (P,S,OS) で {len(df_phase2_result)} 件ヒット。")
 
     # 2. 広範囲カラム (本文, 件名) に対するAND/OR検索
     
@@ -133,7 +132,6 @@ def _execute_keyword_search(df: pd.DataFrame, or_groups: List[List[str]]) -> pd.
     if not df_phase3_result.empty and 'ポジション' in df_phase3_result.columns:
         df_phase3_result.loc[:, 'ポジション'] = ''
         
-    print(f"INFO: 広範囲検索 (本文,件名) で {len(df_phase3_result)} 件ヒット。")
     
     # --- 結果の結合 (フェーズ2を上位に、フェーズ3を下位に) ---
     df_final_filtered = pd.concat([df_phase2_result, df_phase3_result]).reset_index(drop=True)
@@ -183,7 +181,6 @@ def filter_skillsheets(df: pd.DataFrame, simple_keywords: List[str], or_groups: 
                 upper = limits.get('upper')
                 
         except (ValueError, TypeError) as e:
-            print(f"🚨 範囲フィルタリングエラー (キー: {key})：入力値 '{lower}' または '{upper}' が無効な数値形式です。フィルタリングをスキップします。{e}")
             continue
         # ----------------------------------------
         
@@ -223,7 +220,6 @@ def filter_skillsheets(df: pd.DataFrame, simple_keywords: List[str], or_groups: 
                 df_filtered = df_filtered.reset_index(drop=True)
                 
             except Exception as e:
-                print(f"🚨 フィルタリングエラー: '{col_name}' - {e}")
                 continue
                 
         # --- 単価 (①完全内包[範囲] → ②完全内包[単独] → ③部分重複 → ④NaN の順で並び替え、並び順確定) ---
@@ -282,7 +278,6 @@ def filter_skillsheets(df: pd.DataFrame, simple_keywords: List[str], or_groups: 
                 df_filtered = df_filtered.reset_index(drop=True)
 
             except Exception as e:
-                print(f"🚨 データ型エラー: '{col_name}'の入力値またはデータが無効です。{e}")
                 continue
 
         # --- 実働開始 (期間内の数字 → 即日 → NaN の順に表示を固定、並び順確定) ---
@@ -419,7 +414,6 @@ class App(tk.Toplevel):
             
         if is_running and stop_flag:
             # もし処理が実行中なら
-            print("INFO: 検索一覧の×ボタン検知。バックグラウンド処理に停止を要求します...")
             
             # 1. 中断フラグを立てる
             stop_flag.set()
@@ -433,7 +427,6 @@ class App(tk.Toplevel):
             
         else:
             # 処理が実行中でなければ、アプリ全体を終了する
-            print("INFO: 処理は実行されていません。アプリ全体を終了します。")
             try: self.master.destroy() # メインウィンドウを閉じる
             except tk.TclError: pass 
             try: self.destroy()
@@ -484,7 +477,6 @@ class App(tk.Toplevel):
             return df
 
         except Exception as e:
-            print(f"🚨 エラー: データクリーンアップに失敗しました。詳細: {e}") 
             messagebox.showerror("データエラー", f"データの読み込みまたは整形に失敗しました。\n詳細: {e}\n\n空のテーブルを表示します。")
             return pd.DataFrame()
 
@@ -498,10 +490,6 @@ class App(tk.Toplevel):
         # --- ▼▼▼【修正】シンプルANDキーワードを復元 ▼▼▼ ---
         # (Screen1側でタグとして描画されるため、Entryへの復元は不要になった)
         # --- ▲▲▲ 修正ここまで ▲▲▲ ---
-
-    def _set_screen1_keywords(self, keywords_str):
-        # (Screen1のUI変更に伴い、この関数はもう使われない)
-        pass
 
     def show_screen2(self):
         # (変更なし)
@@ -522,7 +510,6 @@ class App(tk.Toplevel):
         self.current_frame.grid(row=0, column=0, sticky='nsew')
 
         if self.db_has_new_data_var and self.db_has_new_data_var.get():
-            print("INFO: 新規データを検出。Screen2表示時に自動で一覧を更新します...")
             # 画面が描画されるのを少し待ってから自動更新を実行
             self.after(100, self.auto_refresh_on_startup)
         # ★★★ 修正ここまで ★★★
@@ -535,16 +522,13 @@ class App(tk.Toplevel):
             # 現在の画面が Screen2 であることを確認
             if self.current_frame and isinstance(self.current_frame, Screen2):
                 # Screen2 の refresh_data_from_db メソッドを直接呼び出す
-                print("DEBUG: auto_refresh_on_startup が refresh_data_from_db を呼び出します。")
                 self.current_frame.refresh_data_from_db()
             elif self.screen2:
                 # current_frame が設定されるのが遅れる場合も想定
-                print("DEBUG: auto_refresh_on_startup (fallback) が refresh_data_from_db を呼び出します。")
                 self.screen2.refresh_data_from_db()
             else:
-                print("WARN: 自動更新を試みましたが、Screen2 が見つかりません。")
+                pass
         except Exception as e:
-            print(f"ERROR: 起動時の自動更新に失敗しました: {e}")
             traceback.print_exc()
 
 
@@ -734,7 +718,7 @@ class Screen1(ttk.Frame):
                  else:
                       self.upper_widgets[key].delete(0, tk.END)
         self.master.range_data = {'age': {'lower': '', 'upper': ''}, 'price': {'lower': '', 'upper': ''}, 'start': {'lower': '', 'upper': ''}}
-        print("INFO: 検索条件をリセットしました。") 
+
 
     # ---------------------------------------------------------------------
     # --- ▼▼▼【新設】Screen1 に タグ管理機能 を追加 (Screen2から移植) ▼▼▼ ---
@@ -954,7 +938,7 @@ class AdvancedSearchPopup(tk.Toplevel):
             if not self.or_group_entries:
                 self.add_keyword_group_ui(keywords_list=[])
         except Exception as e:
-            print(f"キーワードグループ削除エラー (Popup): {e}")
+            pass
 
     def apply_changes(self):
         """ 
@@ -999,7 +983,6 @@ class AdvancedSearchPopup(tk.Toplevel):
         
         # App本体のデータを更新
         self.master_app.or_groups = new_or_groups
-        print(f"INFO: 高度な検索条件を適用しました。 {len(new_or_groups)} グループ")
         self.destroy() # ウィンドウを閉じる
 # ------------------------------------------------------------------------------
 # ▲▲▲ AdvancedSearchPopup 新設ここまで ▲▲▲
@@ -1149,8 +1132,7 @@ class Screen2(ttk.Frame):
         if hasattr(self.master, 'open_email_callback') and callable(self.master.open_email_callback):
             self.master.open_email_callback(entry_id)
         else:
-             print("エラー: open_email_callback が設定されていません。")
-             messagebox.showerror("内部エラー", "Outlookを開く機能が正しく設定されていません。")
+            messagebox.showerror("内部エラー", "Outlookを開く機能が正しく設定されていません。")
 
     def check_attachment_content(self, item_id):
         # (変更なし)
@@ -1163,9 +1145,9 @@ class Screen2(ttk.Frame):
             tree_columns = list(self.tree['columns'])
             
             if 'Attachments' not in tree_columns:
-                 self.btn_attachment_content.config(state='disabled')
-                 return 
-                 
+                self.btn_attachment_content.config(state='disabled')
+                return 
+                
             attachments_col_index = tree_columns.index('Attachments')
             tree_values = self.tree.item(item_id, 'values')
             
@@ -1177,9 +1159,9 @@ class Screen2(ttk.Frame):
                 is_content_available = True
                 
         except (ValueError, IndexError, KeyError) as e: 
-             print(f"check_attachment_content でエラー: {e}")
-             pass 
-             
+            
+            pass 
+            
         if is_content_available:
             self.btn_attachment_content.config(state='normal') 
         else:
@@ -1206,13 +1188,10 @@ class Screen2(ttk.Frame):
     
         # ユーザーが選択したキーワード（スキル名、役職名、OS名など）
         target_keywords = list(set(simple_keywords + flat_or_keywords))
-    
-        print(f"🔍 DEBUG: _debug_keyword_extraction 実行中")
-        print(f"🔍 ユーザー選択キーワードリスト: {target_keywords}")
 
         if not target_keywords or not text_content:
             if not target_keywords:
-                print("🚨 警告: 参照元キーワードリストが空のため、ヒット箇所検索をスキップします。")
+                pass
             return f" [{col_name}] ヒット箇所検索:" \
                 f"\n  - (キーワードリストが空か、本文データがありません)"
 
@@ -1233,23 +1212,23 @@ class Screen2(ttk.Frame):
             lower_user_keyword = user_keyword.lower() 
         
             found = False
-        for pattern_dict in all_pattern_dicts:
-            # 辞書のキーと値を小文字化して比較するための辞書ビューを作成
-            # 例: {"python": ["r'\\bpython\\b'"], "java": [...] }
-            lower_key_map = {k.lower(): k for k in pattern_dict.keys()}
+            for pattern_dict in all_pattern_dicts:
+                # 辞書のキーと値を小文字化して比較するための辞書ビューを作成
+                # 例: {"python": ["r'\\bpython\\b'"], "java": [...] }
+                lower_key_map = {k.lower(): k for k in pattern_dict.keys()}
+                
+                if lower_user_keyword in lower_key_map:
+                    # ユーザーが入力した小文字のキーに対応する元のキー (例: "Python") を取得
+                    original_keyword = lower_key_map[lower_user_keyword]
+                    
+                    # オリジナルのキーでパターンを取得し、元のユーザーキーワードで格納
+                    search_patterns[user_keyword] = pattern_dict[original_keyword]
+                    
+                    found = True
+                    break # 最初に見つかった辞書でループを終了
             
-            if lower_user_keyword in lower_key_map:
-                # ユーザーが入力した小文字のキーに対応する元のキー (例: "Python") を取得
-                original_keyword = lower_key_map[lower_user_keyword]
-                
-                # オリジナルのキーでパターンを取得し、元のユーザーキーワードで格納
-                search_patterns[user_keyword] = pattern_dict[original_keyword]
-                
-                found = True
-                break # 最初に見つかった辞書でループを終了
-        
-        if not found:
-            print(f"DEBUG: キーワード '{user_keyword}' はどのパターン辞書にも見つかりませんでした。")
+            if not found:
+                pass
         
         if not search_patterns:
             output.append("  - ⚠️ 警告: 選択されたキーワードに対応する正規表現パターンが見つかりませんでした。")
@@ -1281,23 +1260,17 @@ class Screen2(ttk.Frame):
                         output.append(f"  - '{skill_name}' (マッチ: '{match.group(0)}') -> '{extracted_text}' ({start_index})")
                     
                 except re.error as e:
-                    print(f"🚨 正規表現エラー (スキル: {skill_name}, パターン: {pattern_str}): {e}")
-                
+                    pass                
         if total_hits == 0:
             output.append("  - ヒットしませんでした。")
             
         return "\n".join(output)
-    
-    # (重複する _debug_keyword_extraction を削除)
-
     def update_display_area_with_debug(self):
         # (変更なし - ロジックはシンプル+高度に対応済み)
         TARGET_COLUMNS = ["本文(テキスト形式)", "本文(ファイル含む)","件名"]
-        print(f"DEBUG: キーワードヒット箇所表示ボタンがクリックされました (対象: {TARGET_COLUMNS})")
         
         selected_items = self.tree.selection()
         if not selected_items:
-            print("DEBUG: Treeviewで何も選択されていません。処理を中断します。")
             return
 
         item_id = selected_items[0]
@@ -1317,7 +1290,6 @@ class Screen2(ttk.Frame):
             entry_id = str(tree_values[id_index])
         except Exception as e:
             error_msg = f"データ取得エラー: ENTRY_IDの取得に失敗しました。詳細: {e}"
-            print(f"🚨 {error_msg}")
             self.body_text.config(state='normal')
             self.body_text.insert(tk.END, error_msg)
             self.body_text.config(state='disabled')
@@ -1326,7 +1298,6 @@ class Screen2(ttk.Frame):
         db_path = os.path.abspath(DATABASE_NAME) 
         if not os.path.exists(db_path):
              error_msg = f"データベース {DATABASE_NAME} が見つかりません。"
-             print(f"🚨 {error_msg}")
              self.body_text.config(state='normal')
              self.body_text.insert(tk.END, error_msg)
              self.body_text.config(state='disabled')
@@ -1370,7 +1341,6 @@ class Screen2(ttk.Frame):
         self.body_text.delete(1.0, tk.END) 
         self.body_text.insert(tk.END, final_text)
         self.body_text.config(state='disabled')
-        print("DEBUG: 両方の本文デバッグ情報の表示が完了しました。")
 
     def apply_highlights(self, keywords: List[str]):
         # (変更なし)
@@ -1406,7 +1376,7 @@ class Screen2(ttk.Frame):
                     
                     start_index = end_index 
         except Exception as e:
-            print(f"ハイライト処理中にエラー: {e}")
+            pass
             
         finally:
             self.body_text.config(state='disabled')
@@ -1493,7 +1463,6 @@ class Screen2(ttk.Frame):
                 else:
                     display_text = f"データベースで EntryID '{entry_id}' が見つかりません。"
             except Exception as db_err:
-                print(f"DB読み込みエラー (update_display_area): {db_err}")
                 display_text = f"データベースからのテキスト取得中にエラーが発生しました。\n詳細: {db_err}"
             finally:
                 if conn: conn.close()
@@ -1504,7 +1473,6 @@ class Screen2(ttk.Frame):
             self.body_text.insert(tk.END, display_text) 
             self.body_text.config(state='disabled')
         except Exception as e:
-            print(f"ERROR: テキストの挿入に失敗: {e}")
             self.body_text.config(state='disabled')
             return
         
@@ -1779,8 +1747,7 @@ class Screen2(ttk.Frame):
         # (変更なし)
         for item in self.tree.get_children(): self.tree.delete(item)
         if self.master.df_filtered_skills.empty or not all(col in self.master.df_filtered_skills.columns for col in self.tree['columns']):
-             print("表示するデータがないか、必要な列が不足しています。") 
-             return 
+            return 
         for row in self.master.df_filtered_skills.itertuples(index=False):
             values = []
             for col in self.tree['columns']:
@@ -1790,8 +1757,8 @@ class Screen2(ttk.Frame):
                     try: val = int(float(val))
                     except (ValueError, TypeError): val = str(val)
                 elif col == '受信日時':
-                     try: val = str(val).split(' ')[0]
-                     except: val = str(val)
+                    try: val = str(val).split(' ')[0]
+                    except: val = str(val)
                 else: val = str(val)
                 if val == '' and col in ['年齢', '単価']:
                     val = 'nan'
@@ -1799,7 +1766,7 @@ class Screen2(ttk.Frame):
             try:
                 self.tree.insert('', 'end', values=values)
             except Exception as e:
-                print(f"🚨 Treeview挿入エラー: 行データ {values} の挿入に失敗しました: {e}")
+                pass 
 
     def reset_sort_status(self):
         # (変更なし)
@@ -1919,8 +1886,6 @@ class Screen2(ttk.Frame):
             self.body_text.delete(1.0, tk.END) 
             self.body_text.insert(tk.END, f"一覧を更新しました。\n（表示件数: {previous_item_count} 件 → {current_item_count} 件）")
             self.body_text.config(state='disabled')
-            
-            print(f"INFO: 検索一覧をDBから更新しました。 (表示件数: {previous_item_count} -> {current_item_count})")
 
         except Exception as e:
             messagebox.showerror("更新エラー", f"一覧の更新中にエラーが発生しました。\n詳細: {e}")
@@ -1953,7 +1918,7 @@ def main():
     })
     
     def dummy_open_email_callback(entry_id):
-        print(f"--- [TEST CALLBACK] Outlookでメールを開きます: {entry_id} ---")
+        
         messagebox.showinfo("テストコールバック", f"Outlookを開く関数が呼ばれました。\nID: {entry_id}")
 
     dummy_main_elements = {}
